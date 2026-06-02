@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { realtimePool } from "@/lib/db";
 import { verifyAccessToken } from "@/lib/auth-jwt";
 import { isRealtimeEnabled, SAFE_IDENT } from "@/lib/realtime";
+import { withCors, corsPreflight } from "@/lib/cors";
 
 // Server-Sent Events stream of row changes for a specific table.
 // Usage from a client app:
@@ -13,7 +14,12 @@ import { isRealtimeEnabled, SAFE_IDENT } from "@/lib/realtime";
 // EventSource doesn't allow custom headers, so the access token can be passed
 // in the `token` query param. Apps that can set headers should prefer
 // `Authorization: Bearer <token>`.
-export async function GET(req: NextRequest) {
+//
+// Wrapped in withCors below so browser apps on an allowed origin (Authentication
+// → CORS origins) can consume the stream — EventSource enforces CORS like any
+// other fetch, and without Access-Control-Allow-Origin the browser blocks the
+// 200 response. Mirrors the /auth/v1/* routes.
+async function handler(req: NextRequest) {
   const schema = req.nextUrl.searchParams.get("schema") ?? "";
   const table = req.nextUrl.searchParams.get("table") ?? "";
 
@@ -125,3 +131,8 @@ export async function GET(req: NextRequest) {
     },
   });
 }
+
+const METHODS = ["GET"] as const;
+
+export const GET = withCors(handler, { methods: METHODS });
+export const OPTIONS = corsPreflight({ methods: METHODS });
