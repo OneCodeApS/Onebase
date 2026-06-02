@@ -35,8 +35,25 @@ CREATE POLICY todos_insert_authenticated
 	TO authenticated
 	WITH CHECK (true);
 
+-- Authenticated update. USING (true) lets any authenticated caller edit any
+-- row — fine for this demo. For per-user ownership, add a user_id column and
+-- change both clauses to (user_id = auth.uid()).
+CREATE POLICY todos_update_authenticated
+	ON public.todos
+	FOR UPDATE
+	TO authenticated
+	USING (true)
+	WITH CHECK (true);
+
+-- Authenticated delete.
+CREATE POLICY todos_delete_authenticated
+	ON public.todos
+	FOR DELETE
+	TO authenticated
+	USING (true);
+
 GRANT SELECT ON public.todos TO anon, authenticated;
-GRANT INSERT ON public.todos TO authenticated;
+GRANT INSERT, UPDATE, DELETE ON public.todos TO authenticated;
 -- No sequence grant needed: the uuidv7() default is generated in-row, not
 -- from a sequence (uuidv7() is executable by PUBLIC, so authenticated can
 -- call it implicitly on INSERT).
