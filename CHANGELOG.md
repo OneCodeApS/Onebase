@@ -8,9 +8,21 @@ While the project is on `0.x`, minor version bumps (`0.1 → 0.2`) may include b
 
 ## [Unreleased]
 
-### Fixed
+## [1.4.0] - 2026-06-02
 
-- **Dashboard admins can now manage RLS on init-created tables** — creating, editing, or deleting an RLS policy (and toggling RLS) on tables like `public.todos` failed with `must be owner of table`. The dashboard connects as `dashboard_admin`, which has `BYPASSRLS` and `ALL` privileges but is neither a superuser nor the *owner* of tables created by the bootstrap `postgres` superuser during DB init — and Postgres requires ownership (not privileges) for `CREATE/ALTER/DROP POLICY` and `ALTER TABLE … ENABLE ROW LEVEL SECURITY`.
+Dashboard admins can now manage RLS policies on tables they didn't create, and the realtime SSE endpoint is reachable from allowed browser origins. **This is a major-upgrade release: it ships a new database migration (`0016`) — apply it as the `postgres` superuser before deploying the new dashboard image.**
+
+### Database
+
+- **`0016_app_owner_rls.sql`** — introduces the `app_owner` owner role and reassigns existing `public` tables to it (see Added). Idempotent; safe to run with the rest of the migration loop. **Must be applied as the `postgres` superuser** (it creates a role, reassigns ownership, and creates an event trigger):
+
+  ```bash
+  docker compose -f docker-compose.yml -f docker-compose.prod.yml cp \
+    postgres/migrations postgres:/tmp/migrations
+  docker compose -f docker-compose.yml -f docker-compose.prod.yml exec postgres bash -c '
+    for f in /tmp/migrations/*.sql; do echo "==> $f"; psql -U postgres -d postgres -f "$f" || exit 1; done
+  '
+  ```
 
 ### Added
 
