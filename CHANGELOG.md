@@ -8,6 +8,14 @@ While the project is on `0.x`, minor version bumps (`0.1 → 0.2`) may include b
 
 ## [Unreleased]
 
+### Fixed
+
+- **Dashboard admins can now manage RLS on init-created tables** — creating, editing, or deleting an RLS policy (and toggling RLS) on tables like `public.todos` failed with `must be owner of table`. The dashboard connects as `dashboard_admin`, which has `BYPASSRLS` and `ALL` privileges but is neither a superuser nor the *owner* of tables created by the bootstrap `postgres` superuser during DB init — and Postgres requires ownership (not privileges) for `CREATE/ALTER/DROP POLICY` and `ALTER TABLE … ENABLE ROW LEVEL SECURITY`.
+
+### Added
+
+- **`app_owner` shared owner role** — a NOLOGIN group role that owns every `public` table; `dashboard_admin` is a member `WITH INHERIT`, so it passes Postgres's ownership checks and the whole admin team (who share that one connection) can manage RLS without ownership being pinned to a single login role. A `SECURITY DEFINER` event trigger (`app_owner_assign_on_create`, in `_dashboard`) reassigns any newly created `public` table to `app_owner`, so RLS management never regresses for tables created via the SQL editor or `psql`. New install: `postgres/init/07_app_owner.sql`. Existing install: run `postgres/migrations/0016_app_owner_rls.sql` once as the `postgres` superuser (`docker compose exec -T postgres psql -U postgres -d "$POSTGRES_DB" < postgres/migrations/0016_app_owner_rls.sql`).
+
 ## [1.3.5] - 2026-05-28
 
 Non-admin operators get read-only access to several admin pages, and the tables browser / policies / DB functions hide system schemas from `read_only`.
