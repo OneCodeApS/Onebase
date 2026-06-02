@@ -8,6 +8,32 @@ While the project is on `0.x`, minor version bumps (`0.1 → 0.2`) may include b
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-06-02
+
+Dashboard admins can now manage RLS policies on tables they didn't create, and the realtime SSE endpoint is reachable from allowed browser origins. **This is a major-upgrade release: it ships a new database migration (`0016`) — apply it as the `postgres` superuser before deploying the new dashboard image.**
+
+### Database
+
+- **`0016_app_owner_rls.sql`** — introduces the `app_owner` owner role and reassigns existing `public` tables to it (see Added). Idempotent; safe to run with the rest of the migration loop. **Must be applied as the `postgres` superuser** (it creates a role, reassigns ownership, and creates an event trigger):
+
+  ```bash
+  docker compose -f docker-compose.yml -f docker-compose.prod.yml cp \
+    postgres/migrations postgres:/tmp/migrations
+  docker compose -f docker-compose.yml -f docker-compose.prod.yml exec postgres bash -c '
+    for f in /tmp/migrations/*.sql; do echo "==> $f"; psql -U postgres -d postgres -f "$f" || exit 1; done
+  '
+  ```
+
+### Added
+
+- **`app_owner` shared owner role for RLS management** — a NOLOGIN group role that owns every `public` table; `dashboard_admin` is a member `WITH INHERIT`, so it passes Postgres's table-ownership checks and the whole admin team (who share that one connection) can create/edit/delete RLS policies and toggle RLS. A `SECURITY DEFINER` event trigger (`app_owner_assign_on_create`, in `_dashboard`) reassigns any newly created `public` table to `app_owner`, so management never regresses for tables created via the SQL editor or `psql`. New installs get this from `postgres/init/07_app_owner.sql`; existing installs apply `postgres/migrations/0016_app_owner_rls.sql` (see Database).
+- **Sample schema demonstrates full CRUD** — `public.todos` now ships with `UPDATE` and `DELETE` policies for `authenticated` (alongside the existing public `SELECT` / authenticated `INSERT`) and grants `INSERT, UPDATE, DELETE` to `authenticated`, so a fresh install exercises all four operations out of the box. A comment points at the per-user-ownership variant (`USING (user_id = auth.uid())`). Fresh installs only — existing `todos` tables are unchanged.
+
+### Fixed
+
+- **Dashboard admins can manage RLS on init-created tables** — creating/editing/deleting an RLS policy (or toggling RLS) on tables like `public.todos` failed with `must be owner of table`. The dashboard connects as `dashboard_admin`, which has `BYPASSRLS` and `ALL` privileges but is neither a superuser nor the *owner* of tables created by the bootstrap `postgres` superuser at init — and Postgres requires ownership (not privileges) for `CREATE/ALTER/DROP POLICY` and `ALTER TABLE … ENABLE ROW LEVEL SECURITY`. Resolved by the `app_owner` role above.
+- **Realtime SSE endpoint now sends CORS headers** — `GET /realtime` returned `200` with no `Access-Control-Allow-Origin`, so browser apps on another origin (e.g. a local dev server) had their `EventSource` connection blocked even though REST and auth worked. The route is served by the dashboard (not PostgREST, which reflects origins by default), so it now uses the same `withCors` / `corsPreflight` allowlist as the `/auth/v1/*` routes (Authentication → CORS origins, falling back to `AUTH_ALLOWED_ORIGINS`). Non-browser clients are unaffected.
+
 ## [1.3.5] - 2026-05-28
 
 Non-admin operators get read-only access to several admin pages, and the tables browser / policies / DB functions hide system schemas from `read_only`.
