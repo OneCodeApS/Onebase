@@ -1,6 +1,6 @@
 -- Supabase-style RLS helper functions, in the `auth` schema.
 --
--- OneCodebase mirrors Supabase's shape (Postgres + PostgREST + auth), and apps
+-- Onebase mirrors Supabase's shape (Postgres + PostgREST + auth), and apps
 -- ported from Supabase expect to write RLS policies like:
 --
 --   USING (owner_id = auth.uid())
