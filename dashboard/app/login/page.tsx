@@ -22,7 +22,7 @@ export default async function LoginPage({
       <div className="w-full max-w-sm">
         <div className="mb-8 text-center">
           <div className="text-base font-semibold tracking-tight text-neutral-100">
-            Onecodebase
+            Onebase
           </div>
           <div className="mt-1 text-xs text-neutral-500">Admin dashboard</div>
         </div>

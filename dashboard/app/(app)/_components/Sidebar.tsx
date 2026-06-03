@@ -74,7 +74,7 @@ export function Sidebar({ email, role }: { email: string; role: UserRole }) {
     <aside className="flex h-screen w-60 shrink-0 flex-col border-r border-neutral-800 bg-neutral-950">
       <div className="flex items-baseline gap-2 border-b border-neutral-800 px-4 py-4">
         <Link href="/" className="text-sm font-semibold text-neutral-100 hover:text-white">
-          Onecodebase
+          Onebase
         </Link>
         <span className="font-mono text-[10px] text-neutral-500">v{APP_VERSION}</span>
       </div>
