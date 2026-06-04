@@ -151,7 +151,7 @@ Optional env vars (only set if you'll use the feature):
 
 | Var | Used by | When to set |
 | --- | --- | --- |
-| `AUTH_REDIRECT_BASE_URL` | End-user auth | If you'll wire Microsoft / OAuth providers — must be the public URL (e.g. `https://api.<host>`) |
+| `AUTH_REDIRECT_BASE_URL` | End-user auth | Only if OAuth callbacks must use a different host than `API_PUBLIC_URL` (the default) — rare |
 | `MICROSOFT_CLIENT_ID` / `MICROSOFT_CLIENT_SECRET` / `MICROSOFT_TENANT` | End-user auth | Fallback if not set via the Auth providers UI |
 
 ### 4. Apply the migrations

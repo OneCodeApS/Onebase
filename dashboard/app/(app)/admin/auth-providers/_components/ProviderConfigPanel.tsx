@@ -243,7 +243,7 @@ export function ProviderConfigPanel({
 
                 <ReadOnlyCopyField
                   label="Redirect URI (callback URL)"
-                  value={provider.redirectUri ?? "(set AUTH_REDIRECT_BASE_URL env var)"}
+                  value={provider.redirectUri ?? "(set API_PUBLIC_URL env var)"}
                   help="Azure portal → Authentication → Web → Redirect URIs. Must match exactly."
                 />
 

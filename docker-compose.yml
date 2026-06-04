@@ -152,6 +152,10 @@ services:
       FUNCTION_ENV_KEY: ${FUNCTION_ENV_KEY:?FUNCTION_ENV_KEY must be set}
       # CORS allowlist for /auth/v1, /functions/v1, /realtime — see lib/cors.ts.
       AUTH_ALLOWED_ORIGINS: ${AUTH_ALLOWED_ORIGINS:-}
+      # Optional override for the OAuth callback base URL. Defaults to
+      # API_PUBLIC_URL (auth lives on the api host); only set this if the
+      # callback host ever needs to differ.
+      AUTH_REDIRECT_BASE_URL: ${AUTH_REDIRECT_BASE_URL:-}
       AUDIT_LOG_DIR: /audit
     volumes:
       # Host path for the file-based audit log. The admin chooses the
