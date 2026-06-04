@@ -8,6 +8,10 @@ While the project is on `0.x`, minor version bumps (`0.1 → 0.2`) may include b
 
 ## [Unreleased]
 
+### Changed
+
+- **OAuth redirect base URL now defaults to `API_PUBLIC_URL`** — the Microsoft sign-in callback URL is derived from `API_PUBLIC_URL` (which every install already sets), so `AUTH_REDIRECT_BASE_URL` no longer needs to be configured. It remains available as an optional override for the rare case where the OAuth callback host differs from the api host, and is now forwarded to the dashboard container by `docker-compose.yml` when set. The Auth Providers admin page shows the resulting redirect URI (`<api-host>/auth/v1/microsoft/callback`) for copy-paste into the Azure app registration. No migration, no new required env vars — a normal patch upgrade.
+
 ## [1.4.0] - 2026-06-02
 
 Dashboard admins can now manage RLS policies on tables they didn't create, and the realtime SSE endpoint is reachable from allowed browser origins. **This is a major-upgrade release: it ships a new database migration (`0016`) — apply it as the `postgres` superuser before deploying the new dashboard image.**
