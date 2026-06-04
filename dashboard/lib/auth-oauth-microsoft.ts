@@ -6,11 +6,21 @@ import { getProvider } from "./auth-settings";
 //   1. auth.providers.microsoft.config (set via the Auth Providers admin page)
 //   2. Env vars: MICROSOFT_CLIENT_ID, MICROSOFT_CLIENT_SECRET, MICROSOFT_TENANT
 //
-// AUTH_REDIRECT_BASE_URL is env-only (it's deployment-shape, not provider config).
-// The callback URL registered with Microsoft must be
-//   `${AUTH_REDIRECT_BASE_URL}/auth/v1/microsoft/callback`.
+// The redirect base is env-only (it's deployment-shape, not provider config).
+// It defaults to API_PUBLIC_URL — the host Caddy serves /auth/v1 on — and can
+// be overridden with AUTH_REDIRECT_BASE_URL for unusual topologies. The
+// callback URL registered with Microsoft must be
+//   `${authRedirectBase()}/auth/v1/microsoft/callback`.
 
 const SCOPES = ["openid", "profile", "email", "offline_access"];
+
+// Public base URL that OAuth providers redirect back to, without trailing
+// slash. Empty string when neither env var is set.
+export function authRedirectBase(): string {
+  const base =
+    process.env.AUTH_REDIRECT_BASE_URL || process.env.API_PUBLIC_URL || "";
+  return base.replace(/\/+$/, "");
+}
 
 type MicrosoftConfig = {
   clientId: string;
@@ -31,18 +41,18 @@ async function cfg(): Promise<MicrosoftConfig> {
     "";
   const tenant =
     (dbCfg.tenant as string) || process.env.MICROSOFT_TENANT || "common";
-  const base = process.env.AUTH_REDIRECT_BASE_URL;
+  const base = authRedirectBase();
 
   if (!clientId || !clientSecret || !base) {
     throw new Error(
-      "Microsoft provider not configured (client_id, client_secret, and AUTH_REDIRECT_BASE_URL required)",
+      "Microsoft provider not configured (client_id, client_secret, and API_PUBLIC_URL or AUTH_REDIRECT_BASE_URL required)",
     );
   }
   return {
     clientId,
     clientSecret,
     tenant,
-    redirectUri: `${base.replace(/\/+$/, "")}/auth/v1/microsoft/callback`,
+    redirectUri: `${base}/auth/v1/microsoft/callback`,
   };
 }
 

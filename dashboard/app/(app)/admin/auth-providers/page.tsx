@@ -1,4 +1,5 @@
 import { getAuthSettings, listProviders } from "@/lib/auth-settings";
+import { authRedirectBase } from "@/lib/auth-oauth-microsoft";
 import { Card } from "../../_components/Card";
 import { updateAuthSettings } from "./actions";
 import { ProvidersTable } from "./_components/ProvidersTable";
@@ -44,7 +45,7 @@ export default async function AuthProvidersPage({
     listProviders(),
   ]);
 
-  const base = (process.env.AUTH_REDIRECT_BASE_URL ?? "").replace(/\/+$/, "");
+  const base = authRedirectBase();
   const rows: ProviderRow[] = providers.map((p) => ({
     name: p.name,
     enabled: p.enabled,
