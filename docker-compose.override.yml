@@ -1,0 +1,17 @@
+# Dev-only services. Compose auto-loads this file alongside docker-compose.yml
+# when no explicit -f flags are given (i.e. local dev). Production runs
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+# which never reads this file, so nothing here exists in prod.
+
+services:
+  # SMTP catcher for the magic-link auth provider. In the dashboard, point the
+  # provider's SMTP host at `mailpit`, port 1025 (no TLS, no auth), then read
+  # sent mail at http://127.0.0.1:8025.
+  mailpit:
+    image: axllent/mailpit:v1.21
+    restart: unless-stopped
+    ports:
+      # Web UI, loopback only.
+      - "127.0.0.1:8025:8025"
+    networks:
+      - backend

@@ -12,6 +12,9 @@ export type ProviderRow = {
   // Derived on the server from AUTH_REDIRECT_BASE_URL — shown in the panel
   // so the admin can paste it into the Azure app registration's redirect URIs.
   redirectUri: string | null;
+  // Derived the same way for the magiclink provider — the endpoint client
+  // apps POST {email, redirect_to} to.
+  requestEndpoint: string | null;
 };
 
 function ToggleField({
@@ -124,7 +127,9 @@ export function ProviderConfigPanel({
   }, [onClose]);
 
   const cfg = provider.config ?? {};
-  const hasSecret = Boolean((cfg as { client_secret?: string }).client_secret);
+  const secrets = cfg as { client_secret?: string; smtp_password?: string };
+  const hasSecret = Boolean(secrets.client_secret);
+  const hasSmtpPassword = Boolean(secrets.smtp_password);
 
   return (
     <aside
@@ -253,6 +258,224 @@ export function ProviderConfigPanel({
                     String(cfg.tenant ?? "common") || "common"
                   }/v2.0`}
                   help="Reference only — derived from the tenant above."
+                />
+              </div>
+            </div>
+          )}
+
+          {provider.name === "magiclink" && (
+            <div className="mt-5 space-y-4 border-t border-neutral-800 pt-5">
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                <div className="sm:col-span-2">
+                  <label
+                    htmlFor="ml-smtp-host"
+                    className="block text-xs uppercase tracking-wider text-neutral-500"
+                  >
+                    SMTP host
+                  </label>
+                  <input
+                    id="ml-smtp-host"
+                    type="text"
+                    name="smtp_host"
+                    defaultValue={String(cfg.smtp_host ?? "")}
+                    placeholder="smtp.example.com"
+                    className="mt-1 w-full rounded border border-neutral-700 bg-neutral-900 px-2 py-1 font-mono text-sm"
+                  />
+                </div>
+                <div>
+                  <label
+                    htmlFor="ml-smtp-port"
+                    className="block text-xs uppercase tracking-wider text-neutral-500"
+                  >
+                    Port
+                  </label>
+                  <input
+                    id="ml-smtp-port"
+                    type="number"
+                    name="smtp_port"
+                    min={1}
+                    max={65535}
+                    defaultValue={Number(cfg.smtp_port ?? 587)}
+                    className="mt-1 w-full rounded border border-neutral-700 bg-neutral-900 px-2 py-1 text-sm"
+                  />
+                </div>
+              </div>
+
+              <ToggleField
+                name="smtp_secure"
+                defaultChecked={Boolean(cfg.smtp_secure ?? false)}
+                label="Implicit TLS"
+                description="On for port 465 (TLS from byte one). Off for port 587 — the connection upgrades via STARTTLS."
+              />
+
+              <div>
+                <label
+                  htmlFor="ml-smtp-user"
+                  className="block text-xs uppercase tracking-wider text-neutral-500"
+                >
+                  SMTP username
+                </label>
+                <input
+                  id="ml-smtp-user"
+                  type="text"
+                  name="smtp_user"
+                  defaultValue={String(cfg.smtp_user ?? "")}
+                  placeholder="Leave blank for unauthenticated SMTP (dev catcher)"
+                  className="mt-1 w-full rounded border border-neutral-700 bg-neutral-900 px-2 py-1 font-mono text-sm"
+                />
+              </div>
+
+              <div>
+                <label
+                  htmlFor="ml-smtp-password"
+                  className="block text-xs uppercase tracking-wider text-neutral-500"
+                >
+                  SMTP password
+                </label>
+                <input
+                  id="ml-smtp-password"
+                  type="password"
+                  name="smtp_password"
+                  autoComplete="new-password"
+                  placeholder={
+                    hasSmtpPassword
+                      ? "•••••• (saved, leave blank to keep)"
+                      : "SMTP password"
+                  }
+                  className="mt-1 w-full rounded border border-neutral-700 bg-neutral-900 px-2 py-1 font-mono text-sm"
+                />
+                <p className="mt-1 text-xs text-neutral-500">
+                  Stored encrypted (AES-256-GCM via{" "}
+                  <span className="font-mono">FUNCTION_ENV_KEY</span>). Leave
+                  blank to keep the current value.
+                </p>
+              </div>
+
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div>
+                  <label
+                    htmlFor="ml-from-email"
+                    className="block text-xs uppercase tracking-wider text-neutral-500"
+                  >
+                    From email
+                  </label>
+                  <input
+                    id="ml-from-email"
+                    type="email"
+                    name="from_email"
+                    defaultValue={String(cfg.from_email ?? "")}
+                    placeholder="login@example.com"
+                    className="mt-1 w-full rounded border border-neutral-700 bg-neutral-900 px-2 py-1 font-mono text-sm"
+                  />
+                </div>
+                <div>
+                  <label
+                    htmlFor="ml-from-name"
+                    className="block text-xs uppercase tracking-wider text-neutral-500"
+                  >
+                    From name
+                  </label>
+                  <input
+                    id="ml-from-name"
+                    type="text"
+                    name="from_name"
+                    defaultValue={String(cfg.from_name ?? "")}
+                    placeholder="My App"
+                    className="mt-1 w-full rounded border border-neutral-700 bg-neutral-900 px-2 py-1 text-sm"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label
+                  htmlFor="ml-app-name"
+                  className="block text-xs uppercase tracking-wider text-neutral-500"
+                >
+                  Application name
+                </label>
+                <input
+                  id="ml-app-name"
+                  type="text"
+                  name="app_name"
+                  defaultValue={String(cfg.app_name ?? "")}
+                  placeholder="My App"
+                  className="mt-1 w-full rounded border border-neutral-700 bg-neutral-900 px-2 py-1 text-sm"
+                />
+                <p className="mt-1 text-xs text-neutral-500">
+                  Shown in the email subject and body so users recognise the
+                  sign-in request.
+                </p>
+              </div>
+
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                <div>
+                  <label
+                    htmlFor="ml-link-exp"
+                    className="block text-xs uppercase tracking-wider text-neutral-500"
+                  >
+                    Link expiry (seconds)
+                  </label>
+                  <input
+                    id="ml-link-exp"
+                    type="number"
+                    name="link_expiration_seconds"
+                    min={60}
+                    max={3600}
+                    defaultValue={Number(cfg.link_expiration_seconds ?? 900)}
+                    className="mt-1 w-full rounded border border-neutral-700 bg-neutral-900 px-2 py-1 text-sm"
+                  />
+                </div>
+                <div>
+                  <label
+                    htmlFor="ml-session-ttl"
+                    className="block text-xs uppercase tracking-wider text-neutral-500"
+                  >
+                    Session TTL (days)
+                  </label>
+                  <input
+                    id="ml-session-ttl"
+                    type="number"
+                    name="session_ttl_days"
+                    min={1}
+                    max={30}
+                    defaultValue={Number(cfg.session_ttl_days ?? 30)}
+                    className="mt-1 w-full rounded border border-neutral-700 bg-neutral-900 px-2 py-1 text-sm"
+                  />
+                </div>
+                <div>
+                  <label
+                    htmlFor="ml-max-per-hour"
+                    className="block text-xs uppercase tracking-wider text-neutral-500"
+                  >
+                    Max links/hour/user
+                  </label>
+                  <input
+                    id="ml-max-per-hour"
+                    type="number"
+                    name="max_per_hour"
+                    min={1}
+                    max={20}
+                    defaultValue={Number(cfg.max_per_hour ?? 3)}
+                    className="mt-1 w-full rounded border border-neutral-700 bg-neutral-900 px-2 py-1 text-sm"
+                  />
+                </div>
+              </div>
+              <p className="text-xs text-neutral-500">
+                Sign-in links are single-use. Sessions created via magic link
+                use the TTL above — set it shorter than the platform&apos;s
+                30-day default for external-user portals.
+              </p>
+
+              <div className="space-y-3 rounded border border-neutral-800 bg-neutral-900/40 p-3">
+                <div className="text-xs font-medium uppercase tracking-wider text-neutral-400">
+                  For your client app
+                </div>
+                <ReadOnlyCopyField
+                  label="Request endpoint"
+                  value={
+                    provider.requestEndpoint ?? "(set API_PUBLIC_URL env var)"
+                  }
+                  help="POST { email, redirect_to } with the apikey header. redirect_to must be an origin from your CORS allowlist — the wildcard is not accepted for magic links."
                 />
               </div>
             </div>

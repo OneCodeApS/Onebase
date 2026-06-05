@@ -11,6 +11,7 @@ import {
   setProvider,
   type AuthSettings,
 } from "@/lib/auth-settings";
+import { encrypt, isEncryptionConfigured } from "@/lib/encryption";
 
 async function requireAdmin() {
   const s = await getSession();
@@ -71,6 +72,7 @@ export async function updateProvider(formData: FormData) {
   const existing = await getProvider(name);
   const existingCfg = (existing?.config ?? {}) as Record<string, unknown>;
   let nextConfig: Record<string, unknown> | undefined;
+  let smtpPasswordChanged = false;
 
   if (name === "microsoft") {
     const clientId = String(formData.get("client_id") ?? "").trim();
@@ -117,6 +119,38 @@ export async function updateProvider(formData: FormData) {
       email_otp_expiration_seconds: otpExp,
       email_otp_length: otpLen,
     };
+  } else if (name === "magiclink") {
+    const num = (key: string, def: number, min: number, max: number) =>
+      clamp(Number(formData.get(key) ?? def), min, max);
+    nextConfig = {
+      ...existingCfg,
+      smtp_host: String(formData.get("smtp_host") ?? "").trim(),
+      smtp_port: num("smtp_port", 587, 1, 65535),
+      smtp_secure: formData.get("smtp_secure") === "on",
+      smtp_user: String(formData.get("smtp_user") ?? "").trim(),
+      from_email: String(formData.get("from_email") ?? "").trim(),
+      from_name: String(formData.get("from_name") ?? "").trim(),
+      app_name: String(formData.get("app_name") ?? "").trim(),
+      link_expiration_seconds: num("link_expiration_seconds", 900, 60, 3600),
+      session_ttl_days: num("session_ttl_days", 30, 1, 30),
+      max_per_hour: num("max_per_hour", 3, 1, 20),
+    };
+    // Only overwrite the password when the admin typed one — and only store
+    // it encrypted. Refusing to save plaintext is deliberate: a DB dump must
+    // never contain a usable SMTP credential.
+    const pwRaw = String(formData.get("smtp_password") ?? "");
+    if (pwRaw.length > 0) {
+      if (!isEncryptionConfigured()) {
+        redirect(
+          "/admin/auth-providers?error=" +
+            encodeURIComponent(
+              "FUNCTION_ENV_KEY is not set — the SMTP password is stored encrypted and can't be saved without it.",
+            ),
+        );
+      }
+      nextConfig.smtp_password = encrypt(pwRaw);
+      smtpPasswordChanged = true;
+    }
   }
 
   await setProvider(name, { enabled, config: nextConfig }, session.userId ?? null);
@@ -139,6 +173,7 @@ export async function updateProvider(formData: FormData) {
           ? !!(nextConfig.client_secret as string)?.length &&
             nextConfig.client_secret !== existingCfg.client_secret
           : false,
+      smtp_password_changed: smtpPasswordChanged,
     },
   });
 

@@ -116,3 +116,53 @@ export async function getEmailProviderConfig(): Promise<EmailProviderConfig> {
     ...raw,
   };
 }
+
+// Magic-link provider config. smtp_password is stored encrypted
+// (lib/encryption.ts) by the admin action and decrypted at send time in
+// lib/email.ts — never returned to the browser.
+export type MagicLinkProviderConfig = {
+  smtp_host: string;
+  smtp_port: number;
+  // false → STARTTLS upgrade on a plaintext connection (port 587);
+  // true → implicit TLS (port 465).
+  smtp_secure: boolean;
+  smtp_user: string;
+  smtp_password: string;
+  from_email: string;
+  from_name: string;
+  // Shown in the email subject/body so users recognise the requesting app.
+  app_name: string;
+  // Deliberately separate from email_otp_expiration_seconds (24h default) —
+  // a sign-in link should live minutes, not a day.
+  link_expiration_seconds: number;
+  // Refresh-session lifetime for sessions created via magic link. Apps with
+  // external users (e.g. subcontractor portals) typically want this shorter
+  // than the platform's 30-day default.
+  session_ttl_days: number;
+  // Per-user request cap (rolling hour). Exceeding it is silently ignored so
+  // the response never reveals whether an account exists.
+  max_per_hour: number;
+};
+
+export const MAGICLINK_DEFAULTS: MagicLinkProviderConfig = {
+  smtp_host: "",
+  smtp_port: 587,
+  smtp_secure: false,
+  smtp_user: "",
+  smtp_password: "",
+  from_email: "",
+  from_name: "",
+  app_name: "",
+  link_expiration_seconds: 900,
+  session_ttl_days: 30,
+  max_per_hour: 3,
+};
+
+export async function getMagicLinkProviderConfig(): Promise<MagicLinkProviderConfig> {
+  const p = await getProvider("magiclink");
+  const raw = (p?.config ?? {}) as Partial<MagicLinkProviderConfig>;
+  return {
+    ...MAGICLINK_DEFAULTS,
+    ...raw,
+  };
+}
