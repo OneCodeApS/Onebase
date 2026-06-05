@@ -22,6 +22,12 @@ const PROVIDER_DESCRIPTORS: ProviderDescriptor[] = [
     label: "Microsoft (Entra ID)",
     description: "OAuth 2.0 / OIDC sign-in using a Microsoft account.",
   },
+  {
+    name: "magiclink",
+    label: "Magic link (email)",
+    description:
+      "Passwordless sign-in: a single-use link is emailed to the user. Requires SMTP configuration.",
+  },
 ];
 
 function descriptorFor(name: string): ProviderDescriptor {
@@ -56,6 +62,8 @@ export default async function AuthProvidersPage({
       p.name === "microsoft" && base
         ? `${base}/auth/v1/microsoft/callback`
         : null,
+    requestEndpoint:
+      p.name === "magiclink" && base ? `${base}/auth/v1/magiclink` : null,
   }));
 
   return (

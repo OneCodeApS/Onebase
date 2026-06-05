@@ -55,5 +55,23 @@ CREATE TABLE auth.sessions (
 
 CREATE INDEX sessions_user_id_idx ON auth.sessions (user_id);
 
+CREATE TABLE auth.magic_link_tokens (
+	id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+	user_id      uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+	-- sha256 hex of the raw token; the plaintext only exists in the emailed link.
+	token_hash   text UNIQUE NOT NULL,
+	-- Validated against the CORS origin allowlist + pinned at request time.
+	redirect_to  text NOT NULL,
+	created_at   timestamptz NOT NULL DEFAULT now(),
+	expires_at   timestamptz NOT NULL,
+	consumed_at  timestamptz,
+	request_ip   inet
+);
+
+-- (user_id, created_at) backs the per-user rate-limit count;
+-- (expires_at) backs the opportunistic cleanup delete.
+CREATE INDEX magic_link_tokens_user_created_idx ON auth.magic_link_tokens (user_id, created_at);
+CREATE INDEX magic_link_tokens_expires_idx ON auth.magic_link_tokens (expires_at);
+
 GRANT ALL ON ALL TABLES    IN SCHEMA auth TO dashboard_admin;
 GRANT ALL ON ALL SEQUENCES IN SCHEMA auth TO dashboard_admin;

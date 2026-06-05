@@ -8,8 +8,32 @@ While the project is on `0.x`, minor version bumps (`0.1 → 0.2`) may include b
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-06-05
+
+Passwordless magic-link sign-in for end users, operator-side end-user creation, and a smoother tables browser. **This is a major-upgrade release: it ships a new database migration (`0018`) — apply it before deploying the new dashboard image.**
+
+### Database
+
+- **`0018_magic_link.sql`** — adds `auth.magic_link_tokens` (single-use, hashed sign-in tokens) and seeds the disabled `magiclink` row in `auth.providers`. Idempotent; safe to run with the rest of the migration loop:
+
+  ```bash
+  docker compose -f docker-compose.yml -f docker-compose.prod.yml cp \
+    postgres/migrations postgres:/tmp/migrations
+  docker compose -f docker-compose.yml -f docker-compose.prod.yml exec postgres bash -c '
+    for f in /tmp/migrations/*.sql; do echo "==> $f"; psql -U postgres -d postgres -f "$f" || exit 1; done
+  '
+  ```
+
+### Added
+
+- **Magic-link (passwordless email) sign-in** — new `magiclink` auth provider, disabled by default. Two endpoints: `POST /auth/v1/magiclink` (`{email, redirect_to}` → always `200 {}`, no account enumeration) and `/auth/v1/magiclink/verify` (GET renders an auto-submitting confirm page so mail scanners can't burn the token; POST atomically consumes it and 303-redirects to the app with tokens in the URL fragment — same contract as the Microsoft callback, so `onecodebase-js`'s `getSessionFromUrl()` handles both). Security defaults: tokens are 32 random bytes stored as SHA-256 hashes, single-use, 15-minute expiry (configurable 1–60 min); `redirect_to` must be `https` and on the CORS origin allowlist (the `*` wildcard is rejected — no open redirects) and is pinned at request time; per-user cap (3/hour, silent) plus per-IP flood brake (429); users are only created on request when *Allow signups* is on — otherwise unknown emails are silently ignored. SMTP is configured per install in Admin → Auth providers (host/port/TLS/credentials, from address, app name, link expiry, session TTL); the SMTP password is stored AES-256-GCM-encrypted using the existing `FUNCTION_ENV_KEY`. Magic-link sessions can use a shorter refresh TTL (`session_ttl_days`, 1–30) than the platform's 30-day default — intended for external-user portals. **No new required env vars.**
+- **Dev mail catcher** — `docker-compose.override.yml` (auto-loaded in dev only) ships a [Mailpit](https://github.com/axllent/mailpit) service: point the provider's SMTP host at `mailpit:1025` and read sent mail at `http://127.0.0.1:8025`. Production compose never loads it.
+
+- **Create end users from the dashboard** — Admin → End users has a **+** button (top right) → *End user* → a slide-over panel from the right with email + password. Provisions the account directly (argon2-hashed, `email` identity row, audit-logged) so operators never need to enable public signups to onboard users. Pairs with the existing Reset password / Disable / Delete row actions.
+
 ### Changed
 
+- **Tables sidebar scrolls independently** — the table list in `/tables` now has its own scrollbar instead of scrolling away with the page content; long table lists and long table pages no longer fight over one document scroll.
 - **OAuth redirect base URL now defaults to `API_PUBLIC_URL`** — the Microsoft sign-in callback URL is derived from `API_PUBLIC_URL` (which every install already sets), so `AUTH_REDIRECT_BASE_URL` no longer needs to be configured. It remains available as an optional override for the rare case where the OAuth callback host differs from the api host, and is now forwarded to the dashboard container by `docker-compose.yml` when set. The Auth Providers admin page shows the resulting redirect URI (`<api-host>/auth/v1/microsoft/callback`) for copy-paste into the Azure app registration. No migration, no new required env vars — a normal patch upgrade.
 
 ## [1.4.0] - 2026-06-02

@@ -191,7 +191,7 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml logs dashboard -
 
 All five containers `Up`, dashboard `(healthy)`. Logs should not have env-var errors.
 
-Open the dashboard in your browser, sign in, walk through the new features the CHANGELOG mentions.
+Open the dashboard in your browser, sign in, walk through the new features the CHANGELOG mentions. Features that send email (e.g. the magic-link auth provider) need SMTP configured under **Admin → Auth providers** — per install, no env vars involved.
 
 ---
 

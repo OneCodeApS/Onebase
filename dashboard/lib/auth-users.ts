@@ -104,9 +104,13 @@ export async function createSession(input: {
   user_id: string;
   user_agent?: string | null;
   ip?: string | null;
+  // Optional override of the 30-day default — magic-link sessions can be
+  // configured shorter per provider (auth.providers.magiclink config).
+  ttlDays?: number;
 }): Promise<{ refreshToken: string; sessionId: string; expiresAt: Date }> {
   const refreshToken = crypto.randomBytes(48).toString("base64url");
-  const expiresAt = new Date(Date.now() + REFRESH_TOKEN_TTL_DAYS * 24 * 3600 * 1000);
+  const ttlDays = input.ttlDays ?? REFRESH_TOKEN_TTL_DAYS;
+  const expiresAt = new Date(Date.now() + ttlDays * 24 * 3600 * 1000);
   const { rows } = await pool().query<{ id: string }>(
     `INSERT INTO auth.sessions
        (user_id, refresh_token_hash, expires_at, user_agent, ip)

@@ -55,6 +55,31 @@ export async function getAllowedOrigins(): Promise<string[]> {
   return list;
 }
 
+// Validates a redirect target that will carry auth tokens in its fragment
+// (magic-link verify, and any future token-bearing redirect). Stricter than
+// CORS: the wildcard is NOT accepted — it would make the caller an open
+// redirect that hands tokens to any origin. https only, except
+// localhost/*.localhost for dev. Returns the normalised URL or null.
+export async function validateRedirectTarget(
+  raw: string,
+): Promise<string | null> {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return null;
+  }
+  const devHost =
+    url.hostname === "localhost" || url.hostname.endsWith(".localhost");
+  if (url.protocol !== "https:" && !(url.protocol === "http:" && devHost)) {
+    return null;
+  }
+  const list = await getAllowedOrigins();
+  if (list.length === 0 || list.includes("*")) return null;
+  if (!list.includes(url.origin)) return null;
+  return url.toString();
+}
+
 async function resolveAllowOrigin(
   reqOrigin: string | null,
 ): Promise<string | null> {

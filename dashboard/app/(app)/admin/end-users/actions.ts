@@ -6,7 +6,12 @@ import { revalidatePath } from "next/cache";
 import { pool } from "@/lib/db";
 import { getSession } from "@/lib/session";
 import { audit } from "@/lib/audit";
-import { hashPassword } from "@/lib/auth-users";
+import {
+  createUser,
+  findUserByEmail,
+  hashPassword,
+  upsertIdentity,
+} from "@/lib/auth-users";
 
 async function requireAdmin() {
   const s = await getSession();
@@ -65,6 +70,60 @@ async function setDisabled(id: string, disabled: boolean) {
 
   revalidatePath("/admin/end-users");
   redirect("/admin/end-users");
+}
+
+// Admin-created end user with email/password — the operator path for
+// provisioning accounts without opening public signups. Mirrors the signup
+// route's createUser + upsertIdentity('email') so the providers column and
+// any provider-based logic see the account identically.
+export async function createEndUser(formData: FormData) {
+  const session = await requireAdmin();
+  const ip = await clientIp();
+
+  const email = String(formData.get("email") ?? "")
+    .trim()
+    .toLowerCase();
+  const password = String(formData.get("password") ?? "");
+
+  if (!email.includes("@")) {
+    redirect("/admin/end-users?error=" + encodeURIComponent("Invalid email"));
+  }
+  if (password.length < 12) {
+    redirect(
+      "/admin/end-users?error=" +
+        encodeURIComponent("Password must be at least 12 characters"),
+    );
+  }
+  if (await findUserByEmail(email)) {
+    redirect(
+      "/admin/end-users?error=" +
+        encodeURIComponent(`${email} already exists`),
+    );
+  }
+
+  const encrypted = await hashPassword(password);
+  const user = await createUser({ email, encrypted_password: encrypted });
+  await upsertIdentity({
+    user_id: user.id,
+    provider: "email",
+    provider_user_id: user.email,
+    identity_data: { email: user.email },
+  });
+
+  await audit({
+    actor: session.email!,
+    actorId: session.userId,
+    role: session.role!,
+    action: "end_user.create",
+    target: email,
+    success: true,
+    ip,
+    sessionId: session.sessionId ?? null,
+    metadata: { user_id: user.id },
+  });
+
+  revalidatePath("/admin/end-users");
+  redirect("/admin/end-users?ok=" + encodeURIComponent(`Created ${email}`));
 }
 
 export async function disableEndUser(formData: FormData) {
