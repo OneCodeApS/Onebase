@@ -105,7 +105,7 @@ export function TablesSidebar({
   }
 
   return (
-    <aside className="flex h-screen w-60 shrink-0 flex-col border-r border-neutral-800 bg-neutral-950">
+    <aside className="flex h-full w-60 shrink-0 flex-col border-r border-neutral-800 bg-neutral-950">
       <div className="border-b border-neutral-800 px-3 py-3">
         <div className="text-xs font-medium uppercase tracking-wider text-neutral-500">
           Schema

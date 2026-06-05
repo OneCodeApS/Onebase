@@ -39,12 +39,15 @@ export default async function TablesLayout({
     ? allTables
     : allTables.filter((t) => !SYSTEM_SCHEMAS.has(t.schema));
   return (
-    <div className="flex min-h-screen">
+    // h-full + overflow-hidden pins this layout to the app shell's <main>
+    // viewport, so the sidebar's table list and the table content scroll
+    // independently instead of growing the document.
+    <div className="flex h-full overflow-hidden">
       <TablesSidebar
         tables={tables}
         canViewSystemSchemas={canViewSystemSchemas}
       />
-      <div className="flex-1 overflow-auto">{children}</div>
+      <div className="flex-1 overflow-y-auto">{children}</div>
     </div>
   );
 }
