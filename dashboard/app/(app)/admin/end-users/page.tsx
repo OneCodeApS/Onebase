@@ -1,6 +1,7 @@
 import { pool } from "@/lib/db";
 import { Card } from "../../_components/Card";
 import { disableEndUser, enableEndUser } from "./actions";
+import { CreateMenu } from "./_components/CreateMenu";
 import { DeleteUserButton } from "./_components/DeleteUserButton";
 import { PasswordResetModal } from "./_components/PasswordResetModal";
 
@@ -107,12 +108,17 @@ export default async function EndUsersPage({
 
   return (
     <main className="px-6 py-10">
-      <h1 className="text-2xl font-semibold">End users</h1>
-      <p className="mt-1 text-sm text-neutral-500">
-        Application end-user accounts. These are separate from dashboard
-        operators — they sign in via{" "}
-        <span className="font-mono">/auth/v1/*</span> and hit the API with JWTs.
-      </p>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-semibold">End users</h1>
+          <p className="mt-1 text-sm text-neutral-500">
+            Application end-user accounts. These are separate from dashboard
+            operators — they sign in via{" "}
+            <span className="font-mono">/auth/v1/*</span> and hit the API with JWTs.
+          </p>
+        </div>
+        <CreateMenu />
+      </div>
 
       {sp.error && (
         <p className="mt-3 rounded border border-red-900/50 bg-red-950/30 px-3 py-2 text-sm text-red-300">
