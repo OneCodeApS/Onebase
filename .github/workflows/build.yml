@@ -24,7 +24,7 @@ permissions:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository_owner }}/onecodebase-dashboard
+  IMAGE_NAME: ${{ github.repository_owner }}/onebase-dashboard
 
 jobs:
   build:
@@ -181,7 +181,7 @@ jobs:
               echo ""
               echo "**Deploy on the server:**"
               echo '```bash'
-              echo "cd /opt/onecodebase && ./scripts/deploy.sh $VERSION"
+              echo "cd /opt/onebase && ./scripts/deploy.sh $VERSION"
               echo '```'
               echo ""
               echo "**Release page:** ${{ github.server_url }}/${{ github.repository }}/releases/tag/$TAG"
