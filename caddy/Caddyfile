@@ -20,6 +20,24 @@
 # strips the prefix and goes straight to MinIO — SigV4 signatures issued by
 # the dashboard match exactly what MinIO recomputes from the stripped path,
 # so video/large-file traffic never touches Node.
+# Load-balances across the running `dashboard` replicas: resolves every A record
+# for the service name via Docker's embedded DNS (127.0.0.11) and refreshes
+# every 30s, so `--scale dashboard=N` is picked up live. With one replica it's a
+# no-op. The cron scheduler + audit-retention sweeper are leader-elected
+# (dashboard/lib/scheduler.ts), so running N replicas is safe. See
+# DEPLOY-BEHIND-APPS01.md → "Running multiple dashboard replicas".
+(dashboard_lb) {
+	reverse_proxy {
+		dynamic a {
+			name dashboard
+			port 3000
+			refresh 30s
+			resolvers 127.0.0.11
+		}
+		lb_policy least_conn
+	}
+}
+
 {$API_HOST} {
 	tls {$CADDY_TLS}
 
@@ -33,26 +51,26 @@
 	}
 
 	handle /auth/v1/* {
-		reverse_proxy dashboard:3000
+		import dashboard_lb
 	}
 
 	handle /realtime* {
-		reverse_proxy dashboard:3000
+		import dashboard_lb
 	}
 
 	handle /functions/v1/* {
-		reverse_proxy dashboard:3000
+		import dashboard_lb
 	}
 
 	# Storage URL-issuance endpoints — dashboard only.
 	handle /storage/v1/object/sign-batch {
-		reverse_proxy dashboard:3000
+		import dashboard_lb
 	}
 	handle /storage/v1/object/sign/* {
-		reverse_proxy dashboard:3000
+		import dashboard_lb
 	}
 	handle /storage/v1/object/upload/* {
-		reverse_proxy dashboard:3000
+		import dashboard_lb
 	}
 
 	# Everything else under /storage/v1/object/* → MinIO directly.
@@ -93,6 +111,6 @@
 	}
 
 	handle {
-		reverse_proxy dashboard:3000
+		import dashboard_lb
 	}
 }

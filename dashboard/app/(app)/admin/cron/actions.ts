@@ -8,7 +8,7 @@ import { audit } from "@/lib/audit";
 import {
   CRON_JOB_NAME,
   deleteCronJob,
-  reloadCron,
+  notifyCronReload,
   upsertCronJob,
   validateCronExpression,
 } from "@/lib/cron";
@@ -56,9 +56,9 @@ export async function saveCronJob(formData: FormData) {
       { name, schedule, function_name: functionName, enabled },
       session.userId ?? null,
     );
-    // Re-build the in-memory scheduler so changes take effect immediately
-    // instead of after the next dashboard process restart.
-    await reloadCron();
+    // Signal the scheduler leader (possibly a different replica) to rebuild its
+    // in-memory schedule, so the change takes effect immediately.
+    await notifyCronReload();
   } catch (e) {
     redirect("/admin/cron?error=" + encodeURIComponent((e as Error).message));
   }
@@ -85,7 +85,7 @@ export async function removeCronJob(formData: FormData) {
   const name = String(formData.get("name") ?? "");
 
   await deleteCronJob(name);
-  await reloadCron();
+  await notifyCronReload();
 
   await audit({
     actor: session.email!,
