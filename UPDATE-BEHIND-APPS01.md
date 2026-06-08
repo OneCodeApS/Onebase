@@ -93,7 +93,7 @@ What the script does:
 
 1. `git pull --ff-only` — pulls updated compose / Caddy / init files (your `Caddyfile` is left alone thanks to `skip-worktree`, *unless this release changed it* — then the pull aborts; see [When an upgrade changes the bundled Caddyfile](#when-an-upgrade-changes-the-bundled-caddyfile)).
 2. Pins `DASHBOARD_IMAGE_TAG=1.2.3` in `.env`.
-3. Pulls `ghcr.io/onecodeaps/onecodebase-dashboard:1.2.3` from GHCR.
+3. Pulls `ghcr.io/onecodeaps/onebase-dashboard:1.2.3` from GHCR.
 4. Recreates **only** the dashboard container (`--no-deps`) and waits until it's healthy (`--wait`).
 5. Prunes dangling images.
 

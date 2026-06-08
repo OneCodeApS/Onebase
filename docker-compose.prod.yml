@@ -7,7 +7,7 @@
 
 services:
   dashboard:
-    image: ghcr.io/${GHCR_OWNER:?GHCR_OWNER must be set}/onecodebase-dashboard:${DASHBOARD_IMAGE_TAG:-latest}
+    image: ghcr.io/${GHCR_OWNER:?GHCR_OWNER must be set}/onebase-dashboard:${DASHBOARD_IMAGE_TAG:-latest}
     pull_policy: always
     # Two replicas for HA + headroom. The cron scheduler and audit-retention
     # sweeper are leader-elected via a Postgres advisory lock

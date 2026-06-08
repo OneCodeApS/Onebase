@@ -23,7 +23,7 @@ You'll need:
 - Ports **80** and **443** open to the internet on that server.
 - A domain you control, with the ability to create A records.
 - At least **1 GB RAM** (2 GB recommended).
-- The first published image — i.e. you (or someone) has run the **Build & Release** workflow at least once on GitHub so an image exists at `ghcr.io/onecodeaps/onecodebase-dashboard`.
+- The first published image — i.e. you (or someone) has run the **Build & Release** workflow at least once on GitHub so an image exists at `ghcr.io/onecodeaps/onebase-dashboard`.
 
 The example below uses `example.com` and IP `203.0.113.10`. Replace these with your real values everywhere they appear.
 
@@ -181,7 +181,7 @@ DASHBOARD_IMAGE_TAG=0.1.0
 
 Save and exit (`Ctrl+O`, `Enter`, `Ctrl+X` in nano).
 
-The image at `ghcr.io/onecodeaps/onecodebase-dashboard` is **public**, so no `docker login` is needed.
+The image at `ghcr.io/onecodeaps/onebase-dashboard` is **public**, so no `docker login` is needed.
 
 ---
 
@@ -408,7 +408,7 @@ The dashboard container is replaced with the older image. The database, MinIO st
 
 ### `docker pull` fails: "unauthorized"
 
-The image is supposed to be public. Check on github.com → your profile → Packages → `onecodebase-dashboard` → Package settings → Visibility = Public.
+The image is supposed to be public. Check on github.com → your profile → Packages → `onebase-dashboard` → Package settings → Visibility = Public.
 
 If it's still private, either flip it public or `docker login ghcr.io` on the server with a PAT that has `read:packages` scope.
 

@@ -249,7 +249,7 @@ DASHBOARD_PUBLIC_URL=https://dashboard.example.com
 CADDY_TLS=you@your-domain.com
 ```
 
-The image at `ghcr.io/onecodeaps/onecodebase-dashboard` is **public**, so no `docker login` is needed.
+The image at `ghcr.io/onecodeaps/onebase-dashboard` is **public**, so no `docker login` is needed.
 
 **8. Run the first deploy.**
 

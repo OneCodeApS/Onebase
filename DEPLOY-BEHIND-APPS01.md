@@ -265,7 +265,7 @@ Expect **exactly one** `[scheduler] acquired leadership` line; the other replica
 The GHCR image visibility is private. Two-step fix (org owner needed):
 
 1. **https://github.com/organizations/OneCodeApS/settings/packages** — enable "Public" for container packages org-wide.
-2. **https://github.com/orgs/OneCodeApS/packages/container/onecodebase-dashboard/settings** — Danger Zone → Change visibility → Public.
+2. **https://github.com/orgs/OneCodeApS/packages/container/onebase-dashboard/settings** — Danger Zone → Change visibility → Public.
 
 After that, anyone (any server) can pull anonymously.
 
