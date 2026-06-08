@@ -1,12 +1,12 @@
 // Next.js runs this once when the server starts (Node runtime only).
-// Used to boot the in-process cron scheduler so admin-defined jobs fire
-// without needing the dashboard UI to be accessed first, and the audit-log
-// retention sweeper so old rows get pruned on a daily cadence.
+// Boots the platform background jobs — the cron scheduler and the audit-log
+// retention sweeper — through a Postgres advisory lock so exactly one replica
+// runs them (see lib/scheduler.ts). Safe to run unchanged on every replica.
 export async function register() {
   if (process.env.NEXT_RUNTIME !== "nodejs") return;
-  // Dynamic import keeps node-only modules out of the Edge bundle.
-  const { initCron } = await import("./lib/cron");
-  await initCron();
-  const { initAuditRetention } = await import("./lib/audit-retention");
-  initAuditRetention();
+  // Dynamic import keeps the node-only scheduler subtree (pg, node-cron,
+  // node:crypto, …) out of the edge/browser bundles — see the IgnorePlugin in
+  // next.config.ts, which drops `./lib/scheduler` from non-Node compilations.
+  const { startScheduler } = await import("./lib/scheduler");
+  startScheduler();
 }

@@ -1,6 +1,7 @@
 import { pool } from "./db";
 import { audit } from "./audit";
 import { getSetting } from "./settings";
+import { pruneRateLimitHits } from "./rate-limit";
 
 const PRUNE_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const FIRST_PRUNE_DELAY_MS = 30_000;
@@ -97,16 +98,27 @@ export async function pruneOldAuditRows(): Promise<PruneResult> {
   }
 }
 
+// Timer handles on globalThis so dev HMR (which re-evaluates the module) can't
+// orphan a running interval, and so start/stop can be called repeatedly as
+// scheduler leadership moves between replicas.
 declare global {
   // eslint-disable-next-line no-var
-  var __auditRetentionInitialised: boolean | undefined;
+  var __auditRetentionTimers:
+    | { first?: NodeJS.Timeout; interval?: NodeJS.Timeout }
+    | undefined;
 }
 
-// Background scheduler. Runs once shortly after boot (so startup isn't blocked
-// by a potentially long DELETE) and then daily. Exposed for instrumentation.ts.
-export function initAuditRetention(): void {
-  if (globalThis.__auditRetentionInitialised) return;
-  globalThis.__auditRetentionInitialised = true;
+function timers() {
+  if (!globalThis.__auditRetentionTimers) globalThis.__auditRetentionTimers = {};
+  return globalThis.__auditRetentionTimers;
+}
+
+// Start the sweeper: one run shortly after boot (so startup isn't blocked by a
+// potentially long DELETE), then daily. Only the scheduler leader calls this
+// (lib/scheduler.ts); a no-op if it's already running in this process.
+export function startAuditRetention(): void {
+  const t = timers();
+  if (t.interval) return;
 
   const tick = () => {
     pruneOldAuditRows()
@@ -118,8 +130,25 @@ export function initAuditRetention(): void {
         }
       })
       .catch((e) => console.error("[audit-retention] prune failed", e));
+    // Same daily leader-run sweep also drops stale rate-limit counter rows.
+    pruneRateLimitHits().catch((e) =>
+      console.error("[rate-limit] hit-table prune failed", e),
+    );
   };
 
-  setTimeout(tick, FIRST_PRUNE_DELAY_MS);
-  setInterval(tick, PRUNE_INTERVAL_MS);
+  t.first = setTimeout(tick, FIRST_PRUNE_DELAY_MS);
+  t.interval = setInterval(tick, PRUNE_INTERVAL_MS);
+}
+
+// Stop the sweeper when this replica loses scheduler leadership.
+export function stopAuditRetention(): void {
+  const t = timers();
+  if (t.first) {
+    clearTimeout(t.first);
+    t.first = undefined;
+  }
+  if (t.interval) {
+    clearInterval(t.interval);
+    t.interval = undefined;
+  }
 }

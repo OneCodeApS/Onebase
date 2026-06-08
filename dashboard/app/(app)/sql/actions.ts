@@ -1,5 +1,6 @@
 "use server";
 
+import type { QueryResult as PgQueryResult } from "pg";
 import { headers } from "next/headers";
 import { pool } from "@/lib/db";
 import { getSession } from "@/lib/session";
@@ -79,7 +80,35 @@ export async function runQuery(
 
   const started = Date.now();
   try {
-    const r = await pool().query(sql);
+    // Enforce privileges at the DB layer, not via SQL string parsing:
+    //   admin       — full access as dashboard_admin, autocommit (so VACUUM /
+    //                 CREATE INDEX CONCURRENTLY etc. still work).
+    //   read_write  — SET LOCAL ROLE dashboard_sql_rw inside a transaction:
+    //                 read/write all data, but no DDL / TRUNCATE / role mgmt.
+    //   read_only   — READ ONLY transaction: any write or DDL errors at the DB.
+    // SET LOCAL and the transaction mode reset on COMMIT/ROLLBACK, so a
+    // multi-statement payload can't slip a write past the restriction.
+    let r: PgQueryResult;
+    if (role === "admin") {
+      r = await pool().query(sql);
+    } else {
+      const client = await pool().connect();
+      try {
+        if (role === "read_write") {
+          await client.query("BEGIN");
+          await client.query("SET LOCAL ROLE dashboard_sql_rw");
+        } else {
+          await client.query("BEGIN READ ONLY");
+        }
+        r = await client.query(sql);
+        await client.query("COMMIT");
+      } catch (e) {
+        await client.query("ROLLBACK").catch(() => {});
+        throw e;
+      } finally {
+        client.release();
+      }
+    }
     const durationMs = Date.now() - started;
 
     const fields = r.fields?.map((f) => f.name) ?? [];

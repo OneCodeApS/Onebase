@@ -20,6 +20,11 @@ CREATE TABLE _dashboard.functions (
 	timeout_ms    integer NOT NULL DEFAULT 5000
 	              CHECK (timeout_ms > 0 AND timeout_ms <= 60000),
 	verify_jwt    boolean NOT NULL DEFAULT true,
+	-- When verify_jwt is on, the caller's token role must be >= this. Default
+	-- 'authenticated' means a valid signature alone (e.g. the public anon key)
+	-- is NOT enough — see app/functions/v1/[name]/route.ts.
+	min_role      text NOT NULL DEFAULT 'authenticated'
+	              CHECK (min_role IN ('anon', 'authenticated', 'service_role')),
 	created_at    timestamptz NOT NULL DEFAULT now(),
 	updated_at    timestamptz NOT NULL DEFAULT now(),
 	updated_by    uuid REFERENCES _dashboard.users(id) ON DELETE SET NULL

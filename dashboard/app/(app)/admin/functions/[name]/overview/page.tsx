@@ -91,6 +91,31 @@ export default async function OverviewPage({
 
           <div>
             <label
+              htmlFor="ov-min-role"
+              className="block text-xs uppercase tracking-wider text-neutral-500"
+            >
+              Minimum role
+            </label>
+            <select
+              id="ov-min-role"
+              name="min_role"
+              defaultValue={fn.min_role}
+              className="mt-1 w-full rounded border border-neutral-700 bg-neutral-900 px-2 py-1 text-sm"
+            >
+              <option value="anon">anon — any signed key (incl. the public anon key)</option>
+              <option value="authenticated">authenticated — a signed-in end user</option>
+              <option value="service_role">service_role — server-side only</option>
+            </select>
+            <p className="mt-1 text-xs text-neutral-500">
+              When Verify JWT is on, the caller&apos;s token role must meet this.
+              Default <span className="font-mono">authenticated</span> means the
+              public anon key alone won&apos;t reach the function. Ignored when
+              Verify JWT is off.
+            </p>
+          </div>
+
+          <div>
+            <label
               htmlFor="ov-description"
               className="block text-xs uppercase tracking-wider text-neutral-500"
             >
@@ -144,6 +169,8 @@ export default async function OverviewPage({
           <dd className="font-mono text-neutral-200">{fn.enabled ? "yes" : "no"}</dd>
           <dt className="text-neutral-500">Verify JWT</dt>
           <dd className="font-mono text-neutral-200">{fn.verify_jwt ? "yes" : "no"}</dd>
+          <dt className="text-neutral-500">Min role</dt>
+          <dd className="font-mono text-neutral-200">{fn.min_role}</dd>
           <dt className="text-neutral-500">Description</dt>
           <dd className="text-neutral-300">{fn.description || "—"}</dd>
           <dt className="text-neutral-500">Timeout</dt>

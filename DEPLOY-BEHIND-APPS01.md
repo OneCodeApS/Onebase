@@ -47,6 +47,18 @@ APPS01 handles TLS, so this server's Caddy only does internal Host-header routin
 
 ```bash
 {
+echo "(dashboard_lb) {"
+echo "    reverse_proxy {"
+echo "        dynamic a {"
+echo "            name dashboard"
+echo "            port 3000"
+echo "            refresh 30s"
+echo "            resolvers 127.0.0.11"
+echo "        }"
+echo "        lb_policy least_conn"
+echo "    }"
+echo "}"
+echo ""
 echo "http://{\$API_HOST} {"
 echo "    handle_path /rest/v1/* {"
 echo "        reverse_proxy postgrest:3000"
@@ -56,22 +68,22 @@ echo "        rewrite * /rpc{uri}"
 echo "        reverse_proxy postgrest:3000"
 echo "    }"
 echo "    handle /auth/v1/* {"
-echo "        reverse_proxy dashboard:3000"
+echo "        import dashboard_lb"
 echo "    }"
 echo "    handle /realtime* {"
-echo "        reverse_proxy dashboard:3000"
+echo "        import dashboard_lb"
 echo "    }"
 echo "    handle /functions/v1/* {"
-echo "        reverse_proxy dashboard:3000"
+echo "        import dashboard_lb"
 echo "    }"
 echo "    handle /storage/v1/object/sign-batch {"
-echo "        reverse_proxy dashboard:3000"
+echo "        import dashboard_lb"
 echo "    }"
 echo "    handle /storage/v1/object/sign/* {"
-echo "        reverse_proxy dashboard:3000"
+echo "        import dashboard_lb"
 echo "    }"
 echo "    handle /storage/v1/object/upload/* {"
-echo "        reverse_proxy dashboard:3000"
+echo "        import dashboard_lb"
 echo "    }"
 echo "    handle_path /storage/v1/object/* {"
 echo "        reverse_proxy minio:9000 {"
@@ -84,7 +96,7 @@ echo "    }"
 echo "}"
 echo ""
 echo "http://{\$DASHBOARD_HOST} {"
-echo "    reverse_proxy dashboard:3000"
+echo "    import dashboard_lb"
 echo "}"
 } > caddy/Caddyfile
 ```
@@ -207,6 +219,44 @@ curl -I https://dashboard.<your-subdomain>.madebyonecode.dk
 Expected: `200` (with two seeded todos), `307` (redirect to /login).
 
 Open the dashboard in a browser and sign in with the admin you created.
+
+## Running multiple dashboard replicas (HA)
+
+The dashboard is stateless apart from two background jobs — the cron scheduler and the audit-log retention sweeper — which are **leader-elected** via a Postgres advisory lock (`dashboard/lib/scheduler.ts`). So you can run any number of replicas: exactly one holds the lock and runs the jobs, and if it dies another takes over within ~15s. Sessions are iron-session cookies (signed, stateless), so **no sticky sessions** are needed; Caddy round-robins freely.
+
+`docker-compose.prod.yml` ships `deploy.replicas: 2`, and the Caddyfile from step 2 already load-balances across them via the `dashboard_lb` snippet (dynamic DNS upstreams — a plain `reverse_proxy dashboard:3000` would **not** spread load across replicas, it pins to one). A normal `up -d --wait` brings up both:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --wait
+docker compose -f docker-compose.yml -f docker-compose.prod.yml ps   # 2 dashboard containers, both healthy
+```
+
+Change the count with `--scale` (overrides the compose default):
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --scale dashboard=3
+```
+
+If you only want **one** replica (small server), set `deploy.replicas: 1` in `docker-compose.prod.yml` — everything behaves exactly as the single-process setup did.
+
+### Connection budget
+
+Realtime fans out over a **single shared `LISTEN` connection per replica** (`dashboard/lib/realtime-listener.ts`): a thousand open chat/SSE streams cost **one** Postgres connection, not one each. So each replica's direct-to-Postgres footprint (the connections that must bypass PgBouncer) is tiny and constant:
+
+- 1 realtime fan-out connection, plus
+- 1 leader-election connection (on the leader replica only).
+
+That's ~1–2 direct connections per replica, so you can scale `dashboard` well past 2 without approaching Postgres `max_connections` (**150**, in `docker-compose.yml`). PgBouncer-routed traffic (PostgREST + the dashboard's general queries, pooled at 30 each) is separate and multiplexed.
+
+> Earlier versions held one Postgres connection *per* SSE subscriber, which capped concurrent realtime users at ~50/replica and made this the scaling ceiling. The fan-out hub removed that — realtime concurrency is now bounded by memory, not DB connections.
+
+### Verify leadership after scaling
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.prod.yml logs dashboard | grep -E '\[scheduler\]|\[leader\]'
+```
+
+Expect **exactly one** `[scheduler] acquired leadership` line; the other replicas log `[leader] another replica holds the scheduler lock — standing by`. Cron edits made through any replica reach the leader over `NOTIFY cron_reload`, so they still take effect immediately.
 
 ## Known problems
 

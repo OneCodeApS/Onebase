@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { realtimePool } from "@/lib/db";
+import { realtimeHub } from "@/lib/realtime-listener";
 import { verifyAccessToken } from "@/lib/auth-jwt";
 import { isRealtimeEnabled, SAFE_IDENT } from "@/lib/realtime";
 import { withCors, corsPreflight } from "@/lib/cors";
@@ -51,28 +51,8 @@ async function handler(req: NextRequest) {
 
   const stream = new ReadableStream({
     async start(controller) {
-      // Uses the dedicated realtime pool that bypasses PgBouncer, since
-      // LISTEN needs a session-pinned connection.
-      const client = await realtimePool().connect();
       let closed = false;
-
-      // Postgres notifications arrive on the client's connection. Listening
-      // requires that we hold this connection out of the pool for as long
-      // as the SSE subscription is open.
-      try {
-        await client.query(`LISTEN "${channel}"`);
-      } catch (e) {
-        controller.enqueue(
-          encoder.encode(
-            `event: error\ndata: ${JSON.stringify({
-              error: (e as Error).message,
-            })}\n\n`,
-          ),
-        );
-        client.release();
-        controller.close();
-        return;
-      }
+      let unsubscribe: (() => void) | null = null;
 
       function send(line: string) {
         if (closed) return;
@@ -83,35 +63,37 @@ async function handler(req: NextRequest) {
         }
       }
 
+      // Register with the per-replica fan-out hub instead of holding our own
+      // Postgres connection. The hub keeps a single shared LISTEN connection
+      // and delivers this channel's notifications to every subscriber, so a
+      // thousand open streams cost one DB connection, not a thousand.
+      try {
+        unsubscribe = await realtimeHub().subscribe(channel, (payload) => {
+          send(`data: ${payload}\n\n`);
+        });
+      } catch (e) {
+        send(
+          `event: error\ndata: ${JSON.stringify({
+            error: (e as Error).message,
+          })}\n\n`,
+        );
+        try {
+          controller.close();
+        } catch {}
+        return;
+      }
+
       // Initial event so the client knows we're up.
       send(`event: open\ndata: ${JSON.stringify({ schema, table })}\n\n`);
-
-      const onNotify = (msg: { payload?: string }) => {
-        send(`data: ${msg.payload ?? ""}\n\n`);
-      };
-      // Cast — pg's types don't expose the notification event nicely.
-      (client as unknown as { on: (e: string, cb: typeof onNotify) => void }).on(
-        "notification",
-        onNotify,
-      );
 
       // Heartbeat so intermediate proxies don't time us out.
       const hb = setInterval(() => send(`:hb\n\n`), 25_000);
 
-      async function cleanup() {
+      function cleanup() {
         if (closed) return;
         closed = true;
         clearInterval(hb);
-        try {
-          (client as unknown as { off: (e: string, cb: typeof onNotify) => void })
-            .off("notification", onNotify);
-        } catch {}
-        try {
-          await client.query(`UNLISTEN "${channel}"`);
-        } catch {}
-        try {
-          client.release();
-        } catch {}
+        unsubscribe?.();
         try {
           controller.close();
         } catch {}

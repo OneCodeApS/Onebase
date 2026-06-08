@@ -15,6 +15,7 @@ import {
   type PasswordRequirements,
 } from "@/lib/auth-settings";
 import { corsPreflight, withCors } from "@/lib/cors";
+import { checkRateLimit } from "@/lib/rate-limit";
 
 const METHODS = ["POST"] as const;
 
@@ -84,6 +85,15 @@ async function handler(req: NextRequest) {
   const email = (body.email ?? "").trim().toLowerCase();
   const password = body.password ?? "";
 
+  const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? null;
+  const rl = await checkRateLimit("signup", ip ?? "unknown");
+  if (!rl.ok) {
+    return NextResponse.json(
+      { error: "too_many_requests" },
+      { status: 429, headers: { "Retry-After": String(rl.retryAfter) } },
+    );
+  }
+
   if (!email.includes("@")) {
     return NextResponse.json({ error: "invalid_email" }, { status: 400 });
   }
@@ -134,7 +144,6 @@ async function handler(req: NextRequest) {
   });
 
   const ua = req.headers.get("user-agent");
-  const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? null;
   const session = await createSession({ user_id: user.id, user_agent: ua, ip });
   const access = await signAccessToken({ id: user.id, email: user.email });
 

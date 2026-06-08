@@ -9,6 +9,19 @@ services:
   dashboard:
     image: ghcr.io/${GHCR_OWNER:?GHCR_OWNER must be set}/onecodebase-dashboard:${DASHBOARD_IMAGE_TAG:-latest}
     pull_policy: always
+    # Two replicas for HA + headroom. The cron scheduler and audit-retention
+    # sweeper are leader-elected via a Postgres advisory lock
+    # (dashboard/lib/scheduler.ts), so exactly one replica ever runs them no
+    # matter the count, with automatic failover. Caddy load-balances across them
+    # (caddy/Caddyfile → dashboard_lb). Connection footprint is small: realtime
+    # fans out over ONE shared LISTEN connection per replica
+    # (dashboard/lib/realtime-listener.ts), so each replica holds ~1 direct-to-
+    # Postgres connection for realtime + 1 for the leader lock (leader only),
+    # bypassing PgBouncer — scaling is no longer realtime-connection-bound.
+    # Override per-deploy with `--scale dashboard=N`. See DEPLOY-BEHIND-APPS01.md
+    # → "Running multiple dashboard replicas".
+    deploy:
+      replicas: 2
 
   postgres:
     # Don't expose Postgres on the host network in prod. Use docker exec

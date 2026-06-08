@@ -3,6 +3,7 @@
 import { useRef } from "react";
 import type { BucketPolicy } from "@/lib/storage";
 import { updateBucketPolicy } from "../../actions";
+import { useBackdropDismiss } from "../../../_components/useBackdropDismiss";
 
 // Uses the native <dialog> element — gets backdrop, Escape to close, focus
 // trap, and click-outside dismissal "for free" without a UI lib dependency.
@@ -10,13 +11,7 @@ export function SettingsModal({ policy }: { policy: BucketPolicy }) {
   const dialogRef = useRef<HTMLDialogElement | null>(null);
   const allowedMimeText = policy.allowed_mime?.join(", ") ?? "";
 
-  // Click outside the dialog box closes it. <dialog> doesn't do this out of
-  // the box; clicks on the ::backdrop arrive on the dialog element itself.
-  function handleBackdropClick(e: React.MouseEvent<HTMLDialogElement>) {
-    if (e.target === dialogRef.current) {
-      dialogRef.current?.close();
-    }
-  }
+  const backdrop = useBackdropDismiss(dialogRef);
 
   return (
     <>
@@ -30,7 +25,7 @@ export function SettingsModal({ policy }: { policy: BucketPolicy }) {
 
       <dialog
         ref={dialogRef}
-        onClick={handleBackdropClick}
+        {...backdrop}
         className="m-auto w-full max-w-lg rounded-lg border border-neutral-700 bg-neutral-900 p-0 text-neutral-100 shadow-2xl shadow-black/50 backdrop:bg-black/60"
       >
         <div className="flex items-center justify-between border-b border-neutral-800 px-5 py-3">

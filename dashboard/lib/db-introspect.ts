@@ -148,6 +148,128 @@ export async function listTablesRlsStatus(
   return rows;
 }
 
+// ─── Grants (table / view privileges) ────────────────────────────────────────
+
+export type TableGrant = {
+  grantee: string; // role name, or 'PUBLIC'
+  privileges: string[]; // canonical order, e.g. ['SELECT', 'INSERT']
+  grantable: string[]; // subset of `privileges` held WITH GRANT OPTION
+};
+
+export type TableGrantsRow = {
+  schema: string;
+  table: string;
+  kind: "table" | "view" | "materialized view" | "partitioned table";
+  // The owner has every privilege implicitly; it never appears in `grants`.
+  owner: string;
+  grants: TableGrant[]; // explicit GRANTs to other roles + PUBLIC
+};
+
+// Canonical display order for table-level privileges.
+const PRIVILEGE_ORDER = [
+  "SELECT",
+  "INSERT",
+  "UPDATE",
+  "DELETE",
+  "TRUNCATE",
+  "REFERENCES",
+  "TRIGGER",
+  "MAINTAIN",
+];
+
+function sortPrivileges(privs: string[]): string[] {
+  return [...privs].sort(
+    (a, b) =>
+      (PRIVILEGE_ORDER.indexOf(a) + 1 || 99) -
+      (PRIVILEGE_ORDER.indexOf(b) + 1 || 99),
+  );
+}
+
+// Table / view privilege grants for a schema. relacl holds the explicit grants
+// and is NULL when only the owner has access (owner privileges are implicit and
+// never stored in relacl) — that surfaces here as an empty `grants` array.
+// aclexplode flattens relacl into (grantee, privilege, grantable); grantee oid 0
+// is PUBLIC. Runs as dashboard_admin, so it sees every object.
+export async function listTableGrants(
+  schema: string,
+): Promise<TableGrantsRow[]> {
+  if (!SAFE_IDENT.test(schema)) return [];
+  const { rows } = await pool().query<{
+    schema: string;
+    table: string;
+    kind: TableGrantsRow["kind"];
+    owner: string;
+    acl: { grantee: string; privilege: string; grantable: boolean }[];
+  }>(
+    `SELECT n.nspname AS schema,
+            c.relname AS "table",
+            CASE c.relkind
+              WHEN 'r' THEN 'table'
+              WHEN 'v' THEN 'view'
+              WHEN 'm' THEN 'materialized view'
+              WHEN 'p' THEN 'partitioned table'
+            END AS kind,
+            o.rolname AS owner,
+            COALESCE(
+              json_agg(
+                json_build_object(
+                  'grantee',   COALESCE(g.rolname, 'PUBLIC'),
+                  'privilege', acl.privilege_type,
+                  'grantable', acl.is_grantable
+                )
+                ORDER BY COALESCE(g.rolname, 'PUBLIC'), acl.privilege_type
+              ) FILTER (WHERE acl.privilege_type IS NOT NULL),
+              '[]'::json
+            ) AS acl
+       FROM pg_class c
+       JOIN pg_namespace n ON n.oid = c.relnamespace
+       JOIN pg_roles     o ON o.oid = c.relowner
+       LEFT JOIN LATERAL aclexplode(c.relacl) acl ON true
+       LEFT JOIN pg_roles g ON g.oid = acl.grantee
+      WHERE n.nspname = $1
+        AND c.relkind IN ('r', 'v', 'm', 'p')
+      GROUP BY n.nspname, c.relname, c.relkind, o.rolname
+      ORDER BY c.relname`,
+    [schema],
+  );
+
+  return rows.map((r) => {
+    // Collapse the flat (grantee, privilege) pairs into one row per grantee.
+    const byGrantee = new Map<
+      string,
+      { privileges: string[]; grantable: string[] }
+    >();
+    for (const a of r.acl) {
+      let entry = byGrantee.get(a.grantee);
+      if (!entry) {
+        entry = { privileges: [], grantable: [] };
+        byGrantee.set(a.grantee, entry);
+      }
+      entry.privileges.push(a.privilege);
+      if (a.grantable) entry.grantable.push(a.privilege);
+    }
+    const grants: TableGrant[] = [...byGrantee.entries()]
+      // Drop the owner's own entry. Postgres lists the owner in relacl (with
+      // full privileges) as soon as any grant exists, but that's just the
+      // implicit ownership the Owner column already conveys — showing it on
+      // every row is noise. Other roles + PUBLIC are what matter here.
+      .filter(([grantee]) => grantee !== r.owner)
+      .map(([grantee, v]) => ({
+        grantee,
+        privileges: sortPrivileges(v.privileges),
+        grantable: sortPrivileges(v.grantable),
+      }))
+      .sort((a, b) => a.grantee.localeCompare(b.grantee));
+    return {
+      schema: r.schema,
+      table: r.table,
+      kind: r.kind,
+      owner: r.owner,
+      grants,
+    };
+  });
+}
+
 // ─── DB functions (PLpgSQL, SQL, etc.) ───────────────────────────────────────
 
 export type DbFunctionRow = {
@@ -299,4 +421,30 @@ export async function getDbFunctionByOid(
     volatility: r.volatility as DbFunctionRow["volatility"],
     kind: r.kind as DbFunctionRow["kind"],
   };
+}
+
+// ─── Enums ────────────────────────────────────────────────────────────────
+
+export type EnumType = {
+  schema: string;
+  name: string;
+  values: string[];
+};
+
+// User-defined enum types in a schema, with their labels in declared order.
+export async function listEnums(schema: string): Promise<EnumType[]> {
+  if (!SAFE_IDENT.test(schema)) return [];
+  const { rows } = await pool().query<EnumType>(
+    `SELECT n.nspname AS schema,
+            t.typname AS name,
+            array_agg(e.enumlabel ORDER BY e.enumsortorder) AS values
+       FROM pg_type t
+       JOIN pg_namespace n ON n.oid = t.typnamespace
+       JOIN pg_enum     e ON e.enumtypid = t.oid
+      WHERE n.nspname = $1
+      GROUP BY n.nspname, t.typname
+      ORDER BY t.typname`,
+    [schema],
+  );
+  return rows;
 }

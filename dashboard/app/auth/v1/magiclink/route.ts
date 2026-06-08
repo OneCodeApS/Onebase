@@ -11,6 +11,7 @@ import {
 } from "@/lib/auth-settings";
 import { corsPreflight, validateRedirectTarget, withCors } from "@/lib/cors";
 import { sendMagicLinkEmail } from "@/lib/email";
+import { checkRateLimit } from "@/lib/rate-limit";
 
 const METHODS = ["POST"] as const;
 
@@ -20,35 +21,6 @@ const METHODS = ["POST"] as const;
 // about the caller's own input/config: provider disabled, bad JSON, an
 // unallowlisted redirect_to, or a per-IP flood (which is source-based and
 // reveals nothing about any account).
-
-// Per-IP sliding-window flood brake. In-memory is fine while the dashboard is
-// a single container; the durable per-user cap below is the real limit.
-// Stored on globalThis so dev-mode module reloads don't reset it.
-const IP_LIMIT = 10;
-const IP_WINDOW_MS = 10 * 60_000;
-const IP_MAP_MAX = 10_000;
-
-const g = globalThis as unknown as { __magiclinkIpHits?: Map<string, number[]> };
-function ipLimited(ip: string): { limited: boolean; retryAfter: number } {
-  const map = (g.__magiclinkIpHits ??= new Map<string, number[]>());
-  const now = Date.now();
-  const hits = (map.get(ip) ?? []).filter((t) => now - t < IP_WINDOW_MS);
-  if (hits.length >= IP_LIMIT) {
-    map.set(ip, hits);
-    return {
-      limited: true,
-      retryAfter: Math.max(1, Math.ceil((hits[0] + IP_WINDOW_MS - now) / 1000)),
-    };
-  }
-  hits.push(now);
-  map.set(ip, hits);
-  // Bound memory: evict the oldest entry once the map grows past the cap.
-  if (map.size > IP_MAP_MAX) {
-    const oldest = map.keys().next().value;
-    if (oldest !== undefined) map.delete(oldest);
-  }
-  return { limited: false, retryAfter: 0 };
-}
 
 async function handler(req: NextRequest) {
   if (!(await isProviderEnabled("magiclink"))) {
@@ -70,8 +42,8 @@ async function handler(req: NextRequest) {
   }
 
   const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? null;
-  const flood = ipLimited(ip ?? "unknown");
-  if (flood.limited) {
+  const flood = await checkRateLimit("magiclink", ip ?? "unknown");
+  if (!flood.ok) {
     return NextResponse.json(
       { error: "too_many_requests" },
       { status: 429, headers: { "Retry-After": String(flood.retryAfter) } },

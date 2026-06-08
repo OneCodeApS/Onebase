@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { verifyJwtSignature } from "@/lib/auth-jwt";
 import { publicSignedObjectUrl } from "@/lib/minio";
+import { canSignForBucket } from "@/lib/storage";
 import { corsPreflight, withCors } from "@/lib/cors";
 
 const METHODS = ["POST"] as const;
@@ -46,10 +47,24 @@ async function handler(req: NextRequest) {
   const ttl = clampTtl(body.expires_in ?? DEFAULT_SIGN_TTL);
   const expiresAt = new Date(Date.now() + ttl * 1000).toISOString();
 
+  // Object-level authorization, resolved once per distinct bucket: service_role
+  // anywhere; authenticated only on public buckets. Disallowed items come back
+  // as per-item errors (same shape as a presign failure), so one forbidden
+  // bucket doesn't fail the whole batch.
+  const allowed = new Map<string, boolean>();
+  await Promise.all(
+    [...new Set(body.items.map((it) => it.bucket))].map(async (b) =>
+      allowed.set(b, await canSignForBucket(claims.role, b)),
+    ),
+  );
+
   // SDK calls are synchronous CPU work (HMAC + URL building); no need to
   // serialize them sequentially.
   const items = await Promise.all(
     body.items.map(async (it) => {
+      if (!allowed.get(it.bucket)) {
+        return { bucket: it.bucket, key: it.key, error: "forbidden_bucket" };
+      }
       try {
         const url = await publicSignedObjectUrl("GET", it.bucket, it.key, ttl);
         return { bucket: it.bucket, key: it.key, url, expires_at: expiresAt };

@@ -15,7 +15,8 @@ async function loadTables(): Promise<TableEntry[]> {
   const { rows } = await pool().query<TableEntry>(
     `SELECT n.nspname              AS schema,
             c.relname              AS table_name,
-            c.reltuples::bigint    AS approx_rows
+            c.reltuples::bigint    AS approx_rows,
+            c.relrowsecurity       AS rls_enabled
        FROM pg_catalog.pg_class c
        JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
       WHERE c.relkind = 'r'
@@ -46,6 +47,7 @@ export default async function TablesLayout({
       <TablesSidebar
         tables={tables}
         canViewSystemSchemas={canViewSystemSchemas}
+        isAdmin={session.role === "admin"}
       />
       <div className="flex-1 overflow-y-auto">{children}</div>
     </div>

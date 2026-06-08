@@ -10,6 +10,7 @@ export type EdgeFunction = {
   env: Record<string, string>;
   timeout_ms: number;
   verify_jwt: boolean;
+  min_role: "anon" | "authenticated" | "service_role";
   created_at: Date;
   updated_at: Date;
 };
@@ -29,7 +30,7 @@ export const FUNCTION_NAME = /^[a-z][a-z0-9_-]{0,62}$/;
 export async function listFunctions(): Promise<EdgeFunction[]> {
   const { rows } = await pool().query<EdgeFunction>(
     `SELECT name, description, enabled, code, env, timeout_ms, verify_jwt,
-            created_at, updated_at
+            min_role, created_at, updated_at
        FROM _dashboard.functions
        ORDER BY name`,
   );
@@ -39,7 +40,7 @@ export async function listFunctions(): Promise<EdgeFunction[]> {
 export async function getFunction(name: string): Promise<EdgeFunction | null> {
   const { rows } = await pool().query<EdgeFunction>(
     `SELECT name, description, enabled, code, env, timeout_ms, verify_jwt,
-            created_at, updated_at
+            min_role, created_at, updated_at
        FROM _dashboard.functions WHERE name = $1`,
     [name],
   );
@@ -76,6 +77,7 @@ export async function updateFunction(
     env?: Record<string, string>;
     timeout_ms?: number;
     verify_jwt?: boolean;
+    min_role?: "anon" | "authenticated" | "service_role";
   },
   updatedBy: string | null,
 ): Promise<void> {
@@ -87,7 +89,8 @@ export async function updateFunction(
             env         = COALESCE($5::jsonb, env),
             timeout_ms  = COALESCE($6, timeout_ms),
             verify_jwt  = COALESCE($7, verify_jwt),
-            updated_by  = $8,
+            min_role    = COALESCE($8, min_role),
+            updated_by  = $9,
             updated_at  = now()
       WHERE name = $1`,
     [
@@ -98,6 +101,7 @@ export async function updateFunction(
       patch.env ? JSON.stringify(patch.env) : null,
       patch.timeout_ms ?? null,
       patch.verify_jwt ?? null,
+      patch.min_role ?? null,
       updatedBy,
     ],
   );

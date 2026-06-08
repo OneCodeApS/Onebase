@@ -8,6 +8,65 @@ While the project is on `0.x`, minor version bumps (`0.1 → 0.2`) may include b
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-06-08
+
+A scaling + security release. Realtime now fans out over a single Postgres connection (thousands of concurrent subscribers cost one connection, not one each); the cron scheduler and audit-retention sweeper are leader-elected so the dashboard can run multiple replicas; and a full security audit's findings are fixed across storage, auth, the SQL editor, edge functions, and rate limiting. **Major-upgrade release: ships new migrations (`0019`–`0021`) and behaviour changes that affect existing API clients — read Breaking first.** Fresh installs need no migration step; the init scripts already include everything.
+
+### Breaking
+
+- **Edge functions with `verify_jwt` now require an authenticated caller by default.** A valid signature is no longer sufficient — the caller's token role must be ≥ the function's new `min_role` (default `authenticated`), so the public `anon` key alone no longer reaches a JWT-gated function. To allow anon on a specific function, set its **Minimum role** to `anon` (Admin → Edge functions → Overview), or turn Verify JWT off for truly-public functions.
+- **Storage signing is now bucket-visibility aware.** `authenticated` end-users may only sign GET/upload URLs for **public** buckets; **private** buckets require a `service_role` token (your backend signs on the user's behalf after its own check). Previously any authenticated user could sign for any object in any bucket.
+- **The SQL editor no longer lets `read_write` users run DDL.** `read_write` now runs under a restricted role (DML on all data, but no `CREATE`/`DROP`/`ALTER`/`TRUNCATE`/role management); `read_only` runs in a read-only transaction; `admin` keeps full access.
+- **Production compose runs 2 dashboard replicas** (`deploy.replicas: 2`). Set it back to `1` in `docker-compose.prod.yml` for a single-instance install. Caddy load-balances via a new `dashboard_lb` snippet — regenerate the HTTP-only Caddyfile from `DEPLOY-BEHIND-APPS01.md` step 2 if you maintain one by hand.
+
+### Database
+
+Apply all new migrations (idempotent) before deploying the new image on an **existing** install. Fresh installs get them from the init scripts automatically.
+
+- **`0019_rate_limits.sql`** — `_dashboard.rate_limits` (config) + `_dashboard.rate_limit_hits` (counter) + `rate_limit_take()` for cross-replica auth rate limiting.
+- **`0020_sql_editor_role.sql`** — `dashboard_sql_rw` restricted role for the SQL editor (read/write all data, no DDL).
+- **`0021_function_min_role.sql`** — adds `min_role` to `_dashboard.functions`.
+- The init scripts (`postgres/init/*.sql`) are now a **complete** snapshot — every migration through `0021` is folded in, so a fresh database comes up fully initialised with no migration step (verified by diffing a from-init database against a fully-migrated one).
+
+  ```bash
+  docker compose -f docker-compose.yml -f docker-compose.prod.yml cp postgres/migrations postgres:/tmp/migrations
+  docker compose -f docker-compose.yml -f docker-compose.prod.yml exec postgres bash -c \
+    'for f in /tmp/migrations/*.sql; do echo "==> $f"; psql -U postgres -d postgres -v ON_ERROR_STOP=1 -f "$f" || exit 1; done'
+  ```
+
+### Added
+
+- **Horizontal scaling for the dashboard** — the cron scheduler and audit-log retention sweeper are leader-elected via a Postgres advisory lock (`lib/scheduler.ts`), so exactly one replica runs them with automatic failover. Run N replicas behind Caddy (dynamic-upstream load balancing). See `DEPLOY-BEHIND-APPS01.md` → "Running multiple dashboard replicas".
+- **Realtime fan-out** — all SSE subscribers on a replica share one Postgres `LISTEN` connection (`lib/realtime-listener.ts`); concurrency is bounded by memory, not DB connections. Load-tested to 2000 concurrent streams on a single connection.
+- **Rate-limit settings** — Admin → Rate limits: per-area (sign in / sign up / magic link) configurable throttles, enforced in Postgres so they hold across replicas.
+- **Grants page** — Admin → Schema → Grants: table/view privileges per schema.
+- **Enums page** — Admin → Schema → Enums: user-defined enum types and their values.
+- **Per-function minimum role** — Admin → Edge functions → Overview.
+- **Delete a table from the UI** — hover a table in the Tables sidebar → ⋮ → Delete (admin-only, `RESTRICT`, audited).
+- **Realtime load-test harness** — `npm run loadtest:realtime` (`dashboard/scripts/realtime-loadtest.mjs`).
+
+### Security
+
+- **Storage object-level authorization** on sign / sign-batch / upload (see Breaking).
+- **Configurable, cross-replica auth rate limiting** on sign in / sign up / magic link.
+- **Argon2id hardened** to OWASP parameters (m=19 MiB, t=2, p=1); existing hashes keep verifying.
+- **`verify_jwt` is now an authorization floor** via `min_role` (see Breaking).
+- **SQL editor privilege separation** (see Breaking).
+- **Microsoft OAuth `return_to`** is validated against the redirect allowlist before tokens are issued — closes a token-leaking open redirect.
+- **Constant-time sign-in** — argon2 verify always runs (against a decoy for unknown accounts), removing a user-enumeration timing oracle.
+- **Security response headers** — `X-Frame-Options`, CSP `frame-ancestors`, `X-Content-Type-Options`, `Referrer-Policy`, HSTS, `Permissions-Policy` on every route.
+- **RLS-off warnings** — public (RLS-disabled) tables are flagged in the Tables list (amber dot) and on the table page.
+
+### Changed
+
+- **`next dev` / `next build` use webpack** (`--webpack`), working around a Turbopack bug where `node-cron` in `instrumentation.ts` failed to resolve and leaked postcss worker processes into multi-GB of orphaned `node.exe`.
+- **Sidebar** — RLS policies, DB functions, Grants, Realtime, and Enums are grouped under a collapsible **Schema** menu.
+
+### Fixed
+
+- **`postgres/init` no longer lags `postgres/migrations`** — fresh installs were missing everything from migration `0011` on (cron, functions, function-env, realtime, …); init is now a complete, verified snapshot, so a freshly-reset database is no longer missing tables like `_dashboard.cron_jobs`.
+- **PgBouncer image build** — `pgbouncer/entrypoint.sh` is forced to LF; a CRLF checkout made the container fail with `exec /entrypoint.sh: no such file or directory`. Added `.gitattributes` to keep shell scripts LF on all platforms.
+
 ## [1.5.0] - 2026-06-05
 
 Passwordless magic-link sign-in for end users, operator-side end-user creation, and a smoother tables browser. **This is a major-upgrade release: it ships a new database migration (`0018`) — apply it before deploying the new dashboard image.**

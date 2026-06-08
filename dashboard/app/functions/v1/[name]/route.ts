@@ -24,6 +24,12 @@ function extractToken(req: NextRequest): string | null {
   return req.nextUrl.searchParams.get("token") || null;
 }
 
+const ROLE_RANK: Record<string, number> = {
+  anon: 0,
+  authenticated: 1,
+  service_role: 2,
+};
+
 async function handle(
   req: NextRequest,
   params: Promise<{ name: string }>,
@@ -93,6 +99,33 @@ async function handle(
       return NextResponse.json(
         { error: "invalid_token" },
         { status: 401, headers: { "WWW-Authenticate": "Bearer" } },
+      );
+    }
+
+    // A valid signature isn't enough: the caller's token role must meet the
+    // function's min_role (default 'authenticated'), so the public anon key no
+    // longer reaches a JWT-gated function. service_role > authenticated > anon.
+    const callerRank = caller?.role ? (ROLE_RANK[caller.role] ?? -1) : -1;
+    if (callerRank < (ROLE_RANK[fn.min_role] ?? 1)) {
+      await audit({
+        actor: "<edge-function-caller>",
+        actorId: null,
+        role: null,
+        action: "function.invoke",
+        target: fn.name,
+        success: false,
+        ip,
+        metadata: {
+          method: req.method,
+          trigger: "http",
+          error: "insufficient_role",
+          min_role: fn.min_role,
+          caller_role: caller?.role ?? null,
+        },
+      });
+      return NextResponse.json(
+        { error: "forbidden_role" },
+        { status: 403, headers: { "WWW-Authenticate": "Bearer" } },
       );
     }
   }

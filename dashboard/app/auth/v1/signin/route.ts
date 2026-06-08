@@ -4,9 +4,10 @@ import {
   createSession,
   findUserByEmail,
   touchLastSignIn,
-  verifyPassword,
+  verifyPasswordConstantTime,
 } from "@/lib/auth-users";
 import { isProviderEnabled } from "@/lib/auth-settings";
+import { checkRateLimit } from "@/lib/rate-limit";
 import { corsPreflight, withCors } from "@/lib/cors";
 
 const METHODS = ["POST"] as const;
@@ -25,20 +26,26 @@ async function handler(req: NextRequest) {
   const email = (body.email ?? "").trim().toLowerCase();
   const password = body.password ?? "";
 
-  const user = await findUserByEmail(email);
-  // Constant-ish response so we don't leak which path failed.
-  const ok =
-    !!user &&
-    !user.disabled_at &&
-    !!user.encrypted_password &&
-    (await verifyPassword(user.encrypted_password, password));
+  const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? null;
+  const rl = await checkRateLimit("signin", ip ?? "unknown");
+  if (!rl.ok) {
+    return NextResponse.json(
+      { error: "too_many_requests" },
+      { status: 429, headers: { "Retry-After": String(rl.retryAfter) } },
+    );
+  }
 
-  if (!ok || !user) {
+  const user = await findUserByEmail(email);
+  // Always run an argon2 verify (against a decoy when the account is missing or
+  // passwordless) so response timing doesn't reveal whether the email exists.
+  const stored = user && !user.disabled_at ? user.encrypted_password : null;
+  const passwordOk = await verifyPasswordConstantTime(stored, password);
+
+  if (!user || user.disabled_at || !user.encrypted_password || !passwordOk) {
     return NextResponse.json({ error: "invalid_credentials" }, { status: 401 });
   }
 
   const ua = req.headers.get("user-agent");
-  const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? null;
   const session = await createSession({ user_id: user.id, user_agent: ua, ip });
   await touchLastSignIn(user.id);
   const access = await signAccessToken({ id: user.id, email: user.email });

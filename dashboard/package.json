@@ -1,6 +1,6 @@
 {
   "name": "dashboard",
-  "version": "1.5.0",
+  "version": "2.0.0",
   "private": true,
   "scripts": {
     "dev": "next dev --webpack --disable-source-maps",
@@ -8,7 +8,8 @@
     "build": "next build --webpack",
     "start": "next start -p 3000 -H 0.0.0.0",
     "lint": "next lint",
-    "create-admin": "node ./scripts/create-admin.mjs"
+    "create-admin": "node ./scripts/create-admin.mjs",
+    "loadtest:realtime": "node ./scripts/realtime-loadtest.mjs"
   },
   "dependencies": {
     "@codemirror/lang-javascript": "^6.2.5",

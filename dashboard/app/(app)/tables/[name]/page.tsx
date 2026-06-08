@@ -44,6 +44,17 @@ async function loadRowCount(schema: string, table: string): Promise<number> {
   return Number(rows[0]?.n ?? 0);
 }
 
+async function loadRlsEnabled(schema: string, table: string): Promise<boolean> {
+  const { rows } = await pool().query<{ rls: boolean }>(
+    `SELECT c.relrowsecurity AS rls
+       FROM pg_class c
+       JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE n.nspname = $1 AND c.relname = $2 AND c.relkind = 'r'`,
+    [schema, table],
+  );
+  return rows[0]?.rls ?? false;
+}
+
 async function loadRows(
   schema: string,
   table: string,
@@ -253,6 +264,10 @@ export default async function TableRowsPage({
 
   const isSystemSchema = SYSTEM_SCHEMAS.has(schema);
   const adminPage = ADMIN_PAGE[`${schema}.${name}`];
+  // Tables are created without RLS by design. For non-system (API-exposed)
+  // schemas we surface a warning so an exposed table isn't left wide open by
+  // accident — we don't force RLS on.
+  const rlsEnabled = isSystemSchema ? true : await loadRlsEnabled(schema, name);
 
   return (
     <main className="px-6 py-10">
@@ -289,6 +304,30 @@ export default async function TableRowsPage({
           ) : (
             <>Mutations should go through the SQL editor with care, or the corresponding admin page.</>
           )}
+        </div>
+      )}
+
+      {!isSystemSchema && !rlsEnabled && (
+        <div className="mt-4 rounded border border-amber-900/50 bg-amber-950/30 px-3 py-2 text-sm text-amber-200">
+          <span className="font-medium">Row Level Security is off.</span>{" "}
+          New tables are created without RLS by design — but while it&apos;s off,
+          any role you{" "}
+          <Link
+            href="/admin/grants"
+            className="underline decoration-amber-500/50 underline-offset-2 hover:decoration-amber-300"
+          >
+            grant access
+          </Link>{" "}
+          (including <span className="font-mono">anon</span> /{" "}
+          <span className="font-mono">authenticated</span> over the API) can read
+          and write <em>every</em> row. Enable RLS and add{" "}
+          <Link
+            href="/admin/policies"
+            className="underline decoration-amber-500/50 underline-offset-2 hover:decoration-amber-300"
+          >
+            policies
+          </Link>{" "}
+          to restrict access per row.
         </div>
       )}
 

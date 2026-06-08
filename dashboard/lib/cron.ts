@@ -23,8 +23,6 @@ export const CRON_JOB_NAME = /^[a-z][a-z0-9_-]{0,62}$/;
 declare global {
   // eslint-disable-next-line no-var
   var __cronTasks: Map<string, ScheduledTask> | undefined;
-  // eslint-disable-next-line no-var
-  var __cronInitialised: boolean | undefined;
 }
 
 function tasks(): Map<string, ScheduledTask> {
@@ -162,14 +160,20 @@ async function runJob(name: string): Promise<void> {
   }
 }
 
-export async function reloadCron(): Promise<void> {
-  // Stop and clear any existing tasks.
+// Tear down the in-memory schedule. Called before every rebuild and when this
+// replica loses scheduler leadership (lib/scheduler.ts), so a standby can take
+// over without the jobs double-firing.
+export function stopCron(): void {
   for (const t of tasks().values()) {
     try {
       t.stop();
     } catch {}
   }
   tasks().clear();
+}
+
+export async function reloadCron(): Promise<void> {
+  stopCron();
 
   // Schedule every enabled job.
   const jobs = await listCronJobs();
@@ -187,15 +191,14 @@ export async function reloadCron(): Promise<void> {
     });
     tasks().set(j.name, t);
   }
+  console.log(`[cron] scheduled ${tasks().size} job(s)`);
 }
 
-export async function initCron(): Promise<void> {
-  if (globalThis.__cronInitialised) return;
-  globalThis.__cronInitialised = true;
-  try {
-    await reloadCron();
-    console.log(`[cron] scheduler initialised with ${tasks().size} job(s)`);
-  } catch (e) {
-    console.error("[cron] init failed", e);
-  }
+// Tell the scheduler leader (possibly a different replica) that the cron table
+// changed and it should rebuild. pg_notify is delivered on commit, so the
+// pooled/PgBouncer connection is fine here — only the leader's LISTEN needs a
+// pinned session, and it holds one. The admin cron actions call this after
+// every write.
+export async function notifyCronReload(): Promise<void> {
+  await pool().query(`NOTIFY cron_reload`);
 }
