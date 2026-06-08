@@ -2,6 +2,7 @@
 
 import { useRef, useState } from "react";
 import { createPolicy, updatePolicy } from "../actions";
+import { useBackdropDismiss } from "../../../_components/useBackdropDismiss";
 
 export type PolicyInitial = {
   schema: string;
@@ -35,9 +36,7 @@ export function PolicyModal({
   // track it in state to render the disabled fields correctly.
   const [cmd, setCmd] = useState<PolicyInitial["cmd"]>(initial?.cmd ?? "ALL");
 
-  function handleBackdropClick(e: React.MouseEvent<HTMLDialogElement>) {
-    if (e.target === dialogRef.current) dialogRef.current?.close();
-  }
+  const backdrop = useBackdropDismiss(dialogRef);
 
   const allowUsing = cmd !== "INSERT";
   const allowCheck = cmd !== "SELECT";
@@ -48,7 +47,7 @@ export function PolicyModal({
 
       <dialog
         ref={dialogRef}
-        onClick={handleBackdropClick}
+        {...backdrop}
         className="m-auto w-full max-w-2xl rounded-lg border border-neutral-700 bg-neutral-900 p-0 text-neutral-100 shadow-2xl shadow-black/50 backdrop:bg-black/60"
       >
         <div className="flex items-center justify-between border-b border-neutral-800 px-5 py-3">

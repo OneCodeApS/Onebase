@@ -16,6 +16,7 @@ function isAdminPath(pathname: string): boolean {
 // the action — this only opens up the rendered pages, not the mutations.
 function isNonAdminReadable(pathname: string): boolean {
   if (pathname === "/admin/policies") return true;
+  if (pathname === "/admin/grants") return true;
   if (pathname === "/admin/cron") return true;
 
   if (pathname === "/admin/db-functions") return true;

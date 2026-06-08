@@ -2,13 +2,12 @@
 
 import { useRef } from "react";
 import { resetEndUserPassword } from "../actions";
+import { useBackdropDismiss } from "../../../_components/useBackdropDismiss";
 
 export function PasswordResetModal({ id, email }: { id: string; email: string }) {
   const dialogRef = useRef<HTMLDialogElement | null>(null);
 
-  function handleBackdropClick(e: React.MouseEvent<HTMLDialogElement>) {
-    if (e.target === dialogRef.current) dialogRef.current?.close();
-  }
+  const backdrop = useBackdropDismiss(dialogRef);
 
   return (
     <>
@@ -22,7 +21,7 @@ export function PasswordResetModal({ id, email }: { id: string; email: string })
 
       <dialog
         ref={dialogRef}
-        onClick={handleBackdropClick}
+        {...backdrop}
         className="m-auto w-full max-w-md rounded-lg border border-neutral-700 bg-neutral-900 p-0 text-neutral-100 shadow-2xl shadow-black/50 backdrop:bg-black/60"
       >
         <div className="flex items-center justify-between border-b border-neutral-800 px-5 py-3">

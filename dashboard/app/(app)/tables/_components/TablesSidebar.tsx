@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
+import { TableRowMenu } from "./TableRowMenu";
 
 export type TableEntry = {
   schema: string;
@@ -24,9 +25,11 @@ const SHOW_SYSTEM_KEY = "tables.showSystemSchemas";
 export function TablesSidebar({
   tables,
   canViewSystemSchemas,
+  isAdmin,
 }: {
   tables: TableEntry[];
   canViewSystemSchemas: boolean;
+  isAdmin: boolean;
 }) {
   const pathname = usePathname();
   const router = useRouter();
@@ -173,21 +176,35 @@ export function TablesSidebar({
             const schemaMatches =
               (searchParams.get("schema") ?? DEFAULT_SCHEMA) === t.schema;
             const isActive = pathnameMatches && schemaMatches;
+            // Only admins can drop tables, and never the platform-managed
+            // system schemas (deleteTable refuses those server-side too).
+            const canDelete = isAdmin && !SYSTEM_SCHEMAS.has(t.schema);
             return (
-              <Link
+              <div
                 key={`${t.schema}.${t.table_name}`}
-                href={href}
-                className={`flex items-center justify-between rounded px-2 py-1.5 text-sm ${
-                  isActive
-                    ? "bg-neutral-800 text-neutral-100"
-                    : "text-neutral-400 hover:bg-neutral-900 hover:text-neutral-100"
+                className={`group relative flex items-center rounded ${
+                  isActive ? "bg-neutral-800" : "hover:bg-neutral-900"
                 }`}
               >
-                <span className="truncate font-mono">{t.table_name}</span>
-                <span className="ml-2 shrink-0 text-xs text-neutral-500">
-                  {t.approx_rows < 0 ? "" : t.approx_rows.toLocaleString()}
-                </span>
-              </Link>
+                <Link
+                  href={href}
+                  className={`flex min-w-0 flex-1 items-center justify-between px-2 py-1.5 text-sm ${
+                    isActive
+                      ? "text-neutral-100"
+                      : "text-neutral-400 group-hover:text-neutral-100"
+                  }`}
+                >
+                  <span className="truncate font-mono">{t.table_name}</span>
+                  <span className="ml-2 shrink-0 text-xs text-neutral-500">
+                    {t.approx_rows < 0 ? "" : t.approx_rows.toLocaleString()}
+                  </span>
+                </Link>
+                {canDelete && (
+                  <div className="pr-1">
+                    <TableRowMenu schema={t.schema} table={t.table_name} />
+                  </div>
+                )}
+              </div>
             );
           })
         )}
