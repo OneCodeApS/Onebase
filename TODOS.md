@@ -77,12 +77,11 @@ Now doubly relevant: `verify_jwt` checks happen in the dashboard, but the underl
 
 ## Latent / operational
 
-### `postgres/init/*.sql` is behind `postgres/migrations/*.sql`
-Fresh installs run the init scripts on first boot. The init scripts only seed v0.1.0 schema (extensions, roles, audit, sample, buckets, auth). Migrations 0005–0013 add realtime, functions, function_env, function_env_encryption, cron jobs, audit retention, and the `pg_read_all_stats` grant — none of which are in init.
+### ~~`postgres/init/*.sql` is behind `postgres/migrations/*.sql`~~ — RESOLVED
+Fresh installs run the init scripts on first boot. The init scripts used to only seed the v0.1.0 schema; migrations 0004–0014 added realtime, functions/verify_jwt, function_env (+ encryption + nullable value), and cron jobs, none of which were in init — so a fresh install ended up with a less complete schema than an upgraded one. The user hit this when `_dashboard.cron_jobs` was missing.
 
-- **Result:** a fresh install ends up with a less complete schema than an upgraded one. The user hit this when `_dashboard.cron_jobs` was missing.
-- **Fix:** backport the migrated tables into new init files (`07_realtime.sql`, `08_functions.sql`, `09_cron_jobs.sql`, etc.) so fresh installs converge. Migrations stay idempotent and become no-ops on fresh installs.
-- **`UPDATE-BEHIND-APPS01.md:196` already claims this is true — fixing the gap brings the docs back in line.**
+- **Fixed:** the missing schema is now folded into init — `auth.settings`/`auth.providers` into `06_auth.sql`, plus new `09_realtime.sql`, `10_functions.sql`, `11_function_env.sql`, `12_cron_jobs.sql`. Verified by booting a fresh Postgres from the init scripts alone and diffing its schema against an init+migrations DB: byte-identical (261 inventory lines, 0 differences).
+- Migrations stay idempotent, so running them on a fresh install is a harmless no-op. Going forward, **any new migration must also be reflected in init** to keep them converged.
 
 ### Caddy routing for `/functions/v1/*`
 Edge functions live on the `dashboard.*` host. External callers expect them under `api.*` (Supabase convention, what the function-author template hints at). Currently a 404 if you hit `api.example.com/functions/v1/<name>`.

@@ -144,6 +144,8 @@ All five containers should report healthy in ~30 seconds. Verify:
 docker compose -f docker-compose.yml -f docker-compose.prod.yml ps
 ```
 
+On this first boot the `postgres/init/*.sql` scripts build the **complete** schema — roles, auth (users/identities/sessions/magic-link/settings/providers), storage bucket policies, edge functions, function env, cron jobs, realtime, and the audit log. A fresh deploy therefore needs **no migration step**; `postgres/migrations/*.sql` only matters when upgrading an existing install (see [`UPDATE-BEHIND-APPS01.md`](./UPDATE-BEHIND-APPS01.md)). The dashboard's cron scheduler and audit-retention sweeper start cleanly against this schema on first launch.
+
 Smoke-test from the server itself (substitute your actual subdomain):
 
 ```bash

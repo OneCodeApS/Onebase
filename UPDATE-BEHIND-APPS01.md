@@ -167,7 +167,7 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml cp \
 docker compose -f docker-compose.yml -f docker-compose.prod.yml exec postgres bash -c '
   for f in /tmp/migrations/*.sql; do
     echo "==> $f"
-    psql -U postgres -d postgres -f "$f" || exit 1
+    psql -U postgres -d postgres -v ON_ERROR_STOP=1 -f "$f" || exit 1
   done
 '
 ```
@@ -250,5 +250,5 @@ docker image prune -f
 - **Migrations don't run automatically.** They're SQL files in `postgres/migrations/` that the operator applies (step 4 of the major-upgrade path). The dashboard container expects the schema to already match.
 - **Updates are dashboard-only.** Postgres / MinIO / Caddy version bumps are separate — those require explicit version bumps in `docker-compose.yml` and a full `up -d` for the affected service. Not part of a normal Onecodebase release.
 - **APPS01 doesn't need to change** for a Onecodebase upgrade. Its site file proxies by hostname, regardless of which dashboard version is behind it.
-- **The `postgres/init/*.sql` scripts only run on a fresh DB** (first ever boot of the Postgres volume). They are mirrored by equivalent migrations under `postgres/migrations/` so existing installs reach the same end state.
+- **The `postgres/init/*.sql` scripts only run on a fresh DB** (first ever boot of the Postgres volume). They contain the **complete schema** — every migration is folded back into them — so a fresh deploy comes up fully initialised with **no migration step needed**. Step 4 (Apply the migrations) is only for upgrading an **existing** install to a release that adds new migrations. The init scripts and `postgres/migrations/*.sql` are kept in lockstep and reach the identical end state, so running the migrations against a fresh DB is a harmless no-op.
 - **Heredoc with auto-indenting terminals**: if you're SSH'd from a client that auto-indents pasted content, multi-line `cat > file << EOF … EOF` blocks will hang because the `EOF` line gets indented. Use the `{ echo …; echo …; } > file` pattern instead — leading whitespace on `echo` lines is just bash syntax and doesn't end up in the file.
