@@ -80,10 +80,14 @@ export async function saveOverview(formData: FormData) {
   const enabled = formData.get("enabled") === "on";
   const verifyJwt = formData.get("verify_jwt") === "on";
   const timeoutMs = clamp(Number(formData.get("timeout_ms") ?? 5000), 100, 60000);
+  const minRoleRaw = String(formData.get("min_role") ?? "authenticated");
+  const minRole = (["anon", "authenticated", "service_role"] as const).find(
+    (r) => r === minRoleRaw,
+  ) ?? "authenticated";
 
   await updateFunction(
     name,
-    { description, enabled, timeout_ms: timeoutMs, verify_jwt: verifyJwt },
+    { description, enabled, timeout_ms: timeoutMs, verify_jwt: verifyJwt, min_role: minRole },
     session.userId ?? null,
   );
 
@@ -101,6 +105,7 @@ export async function saveOverview(formData: FormData) {
       enabled,
       timeout_ms: timeoutMs,
       verify_jwt: verifyJwt,
+      min_role: minRole,
       tab: "overview",
     },
   });

@@ -1,6 +1,7 @@
 import { pool } from "./db";
 import { audit } from "./audit";
 import { getSetting } from "./settings";
+import { pruneRateLimitHits } from "./rate-limit";
 
 const PRUNE_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const FIRST_PRUNE_DELAY_MS = 30_000;
@@ -129,6 +130,10 @@ export function startAuditRetention(): void {
         }
       })
       .catch((e) => console.error("[audit-retention] prune failed", e));
+    // Same daily leader-run sweep also drops stale rate-limit counter rows.
+    pruneRateLimitHits().catch((e) =>
+      console.error("[rate-limit] hit-table prune failed", e),
+    );
   };
 
   t.first = setTimeout(tick, FIRST_PRUNE_DELAY_MS);

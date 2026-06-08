@@ -422,3 +422,29 @@ export async function getDbFunctionByOid(
     kind: r.kind as DbFunctionRow["kind"],
   };
 }
+
+// ─── Enums ────────────────────────────────────────────────────────────────
+
+export type EnumType = {
+  schema: string;
+  name: string;
+  values: string[];
+};
+
+// User-defined enum types in a schema, with their labels in declared order.
+export async function listEnums(schema: string): Promise<EnumType[]> {
+  if (!SAFE_IDENT.test(schema)) return [];
+  const { rows } = await pool().query<EnumType>(
+    `SELECT n.nspname AS schema,
+            t.typname AS name,
+            array_agg(e.enumlabel ORDER BY e.enumsortorder) AS values
+       FROM pg_type t
+       JOIN pg_namespace n ON n.oid = t.typnamespace
+       JOIN pg_enum     e ON e.enumtypid = t.oid
+      WHERE n.nspname = $1
+      GROUP BY n.nspname, t.typname
+      ORDER BY t.typname`,
+    [schema],
+  );
+  return rows;
+}

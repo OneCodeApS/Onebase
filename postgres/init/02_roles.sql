@@ -60,3 +60,17 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public
 	GRANT ALL ON SEQUENCES TO service_role;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public
 	GRANT ALL ON FUNCTIONS TO service_role;
+
+-- Restricted role the SQL editor SET ROLEs into for read_write users. It can
+-- read AND write all data (pg_read_all_data + pg_write_all_data) and bypasses
+-- RLS so operators see every row — but it is NOT an owner or superuser, so it
+-- cannot run DDL (CREATE/DROP/ALTER), TRUNCATE, or role/grant management. That
+-- removes the "effective DBA" power read_write users had through the editor
+-- while still letting them edit data. read_only queries instead run in a
+-- READ ONLY transaction; admins keep full dashboard_admin. The matching
+-- migration is postgres/migrations/0020_sql_editor_role.sql.
+CREATE ROLE dashboard_sql_rw NOLOGIN NOINHERIT BYPASSRLS;
+GRANT pg_read_all_data  TO dashboard_sql_rw;
+GRANT pg_write_all_data TO dashboard_sql_rw;
+-- dashboard_admin must be a member to SET ROLE to it.
+GRANT dashboard_sql_rw TO dashboard_admin;

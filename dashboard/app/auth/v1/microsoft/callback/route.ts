@@ -14,7 +14,7 @@ import {
   type AuthUser,
 } from "@/lib/auth-users";
 import { isProviderEnabled } from "@/lib/auth-settings";
-import { corsPreflight, withCors } from "@/lib/cors";
+import { corsPreflight, validateRedirectTarget, withCors } from "@/lib/cors";
 
 const METHODS = ["GET"] as const;
 
@@ -51,6 +51,19 @@ async function handler(req: NextRequest) {
   const cookieNonce = req.cookies.get("auth_ms_nonce")?.value;
   if (!stateNonce || !cookieNonce || stateNonce !== cookieNonce) {
     return NextResponse.json({ error: "invalid_state" }, { status: 400 });
+  }
+
+  // Decode + validate return_to up front — before minting any tokens — so a
+  // tampered or unallowlisted return_to can't lure a victim through /start and
+  // collect their freshly-issued tokens from the redirect fragment. Mirrors the
+  // magic-link verify path. An empty return_to falls back to a JSON token
+  // response below.
+  const returnTo = encodedReturnTo
+    ? Buffer.from(encodedReturnTo, "base64url").toString("utf8")
+    : "";
+  const validatedReturnTo = returnTo ? await validateRedirectTarget(returnTo) : "";
+  if (returnTo && !validatedReturnTo) {
+    return NextResponse.json({ error: "invalid_redirect" }, { status: 400 });
   }
 
   let tokens;
@@ -106,10 +119,6 @@ async function handler(req: NextRequest) {
   await touchLastSignIn(user.id);
   const access = await signAccessToken({ id: user.id, email: user.email });
 
-  const returnTo = encodedReturnTo
-    ? Buffer.from(encodedReturnTo, "base64url").toString("utf8")
-    : "";
-
   // If no return_to was provided, just hand back the tokens as JSON. Useful
   // for debugging / API testing.
   if (!returnTo) {
@@ -135,7 +144,7 @@ async function handler(req: NextRequest) {
     refresh_token: session.refreshToken,
     refresh_expires_at: session.expiresAt.toISOString(),
   });
-  const url = `${returnTo}#${params.toString()}`;
+  const url = `${validatedReturnTo}#${params.toString()}`;
   const res = NextResponse.redirect(url);
   res.cookies.delete("auth_ms_nonce");
   return res;

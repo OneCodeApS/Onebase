@@ -2,6 +2,31 @@ import type { NextConfig } from "next";
 
 const config: NextConfig = {
   output: "standalone",
+  // Baseline security response headers on every route. CSP is limited to
+  // frame-ancestors (clickjacking) for now — a full script-src policy needs
+  // per-request nonces threaded through Next's inline scripts, which is a
+  // bigger change; this is the high-value subset that won't break the app.
+  async headers() {
+    return [
+      {
+        source: "/:path*",
+        headers: [
+          { key: "X-Frame-Options", value: "DENY" },
+          { key: "Content-Security-Policy", value: "frame-ancestors 'none'" },
+          { key: "X-Content-Type-Options", value: "nosniff" },
+          { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+          {
+            key: "Strict-Transport-Security",
+            value: "max-age=63072000; includeSubDomains",
+          },
+          {
+            key: "Permissions-Policy",
+            value: "camera=(), microphone=(), geolocation=()",
+          },
+        ],
+      },
+    ];
+  },
   // node-cron (CommonJS) loads its background daemon via a server-relative
   // import that Turbopack can't resolve when it bundles/externalizes the
   // package — the instrumentation hook then throws on every server compile,

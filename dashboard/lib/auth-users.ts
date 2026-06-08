@@ -12,7 +12,11 @@ export type AuthUser = {
 };
 
 export async function hashPassword(plain: string): Promise<string> {
-  return hash(plain);
+  // OWASP-recommended Argon2id parameters (m=19 MiB, t=2, p=1). @node-rs/argon2
+  // defaults to only 4 MiB, which is below the recommended minimum. verify()
+  // reads the parameters back out of the stored hash, so existing hashes made
+  // with the old defaults keep verifying — only new hashes use these.
+  return hash(plain, { memoryCost: 19456, timeCost: 2, parallelism: 1 });
 }
 
 export async function verifyPassword(stored: string, plain: string): Promise<boolean> {
@@ -21,6 +25,23 @@ export async function verifyPassword(stored: string, plain: string): Promise<boo
   } catch {
     return false;
   }
+}
+
+// A fixed Argon2id decoy hash so a login attempt for a non-existent or
+// passwordless account still spends argon2-verify CPU. Computed once, lazily.
+let decoyHash: string | null = null;
+
+// Verify `plain` against `stored`; when `stored` is null (no such user, or no
+// password set) it verifies against the decoy and returns false — so the work
+// done, and thus response timing, is independent of whether the account exists.
+// Use this on the sign-in path to avoid a user-enumeration timing oracle.
+export async function verifyPasswordConstantTime(
+  stored: string | null,
+  plain: string,
+): Promise<boolean> {
+  if (!decoyHash) decoyHash = await hashPassword("decoy-not-a-real-password");
+  const result = await verifyPassword(stored ?? decoyHash, plain);
+  return stored ? result : false;
 }
 
 export async function findUserByEmail(email: string): Promise<AuthUser | null> {

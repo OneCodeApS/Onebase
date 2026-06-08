@@ -17,6 +17,7 @@ function isAdminPath(pathname: string): boolean {
 function isNonAdminReadable(pathname: string): boolean {
   if (pathname === "/admin/policies") return true;
   if (pathname === "/admin/grants") return true;
+  if (pathname === "/admin/enums") return true;
   if (pathname === "/admin/cron") return true;
 
   if (pathname === "/admin/db-functions") return true;

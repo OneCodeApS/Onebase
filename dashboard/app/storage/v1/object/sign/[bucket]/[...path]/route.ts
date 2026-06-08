@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { verifyJwtSignature } from "@/lib/auth-jwt";
 import { publicSignedObjectUrl } from "@/lib/minio";
+import { canSignForBucket } from "@/lib/storage";
 import { corsPreflight, withCors } from "@/lib/cors";
 
 const METHODS = ["POST"] as const;
@@ -29,6 +30,12 @@ async function handler(
 
   const { bucket, path } = await ctx.params;
   const key = path.map(decodeURIComponent).join("/");
+
+  // Object-level authorization: an authenticated end-user may only sign for
+  // public buckets; private buckets require service_role (backend-mediated).
+  if (!(await canSignForBucket(claims.role, bucket))) {
+    return NextResponse.json({ error: "forbidden_bucket" }, { status: 403 });
+  }
 
   let body: { expires_in?: number };
   try {
