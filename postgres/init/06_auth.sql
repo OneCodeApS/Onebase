@@ -99,6 +99,8 @@ CREATE TABLE auth.providers (
 INSERT INTO auth.providers (name, enabled, config) VALUES ('email', true, '{}'::jsonb);
 -- Microsoft is disabled by default — admin must enter client_id/secret first.
 INSERT INTO auth.providers (name, enabled, config) VALUES ('microsoft', false, '{}'::jsonb);
+-- Magic link is disabled by default — admin must configure SMTP first.
+INSERT INTO auth.providers (name, enabled, config) VALUES ('magiclink', false, '{}'::jsonb);
 
 GRANT ALL ON ALL TABLES    IN SCHEMA auth TO dashboard_admin;
 GRANT ALL ON ALL SEQUENCES IN SCHEMA auth TO dashboard_admin;
