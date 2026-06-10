@@ -5,7 +5,7 @@ import CodeMirror from "@uiw/react-codemirror";
 import { sql, PostgreSQL } from "@codemirror/lang-sql";
 import { keymap } from "@codemirror/view";
 import { Prec } from "@codemirror/state";
-import { runQuery, type QueryResult } from "../actions";
+import { runQuery, type QueryResult, type Success } from "../actions";
 import type { UserRole } from "@/lib/session";
 import { Card } from "../../_components/Card";
 
@@ -246,6 +246,133 @@ function renderCell(v: unknown): string {
   return String(v);
 }
 
+// Serialize a single value for export. Unlike renderCell, NULL becomes an empty
+// field (not the display em-dash) and Dates become ISO strings so the output
+// round-trips as real data.
+function exportValue(v: unknown): string {
+  if (v === null || v === undefined) return "";
+  if (v instanceof Date) return v.toISOString();
+  if (typeof v === "object") return JSON.stringify(v);
+  return String(v);
+}
+
+// RFC-4180-style CSV: quote any field containing a comma, quote, CR or LF, and
+// double up embedded quotes. CRLF row terminators for spreadsheet compatibility.
+function toCsv(fields: string[], rows: Record<string, unknown>[]): string {
+  const esc = (s: string) => (/[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s);
+  const header = fields.map(esc).join(",");
+  const body = rows.map((r) => fields.map((f) => esc(exportValue(r[f]))).join(",")).join("\r\n");
+  return body ? `${header}\r\n${body}` : header;
+}
+
+function CopyIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
+      strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden>
+      <rect x="9" y="9" width="13" height="13" rx="2" />
+      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+    </svg>
+  );
+}
+
+function CheckIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
+      strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden>
+      <path d="M20 6 9 17l-5-5" />
+    </svg>
+  );
+}
+
+function DownloadIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
+      strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden>
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+      <polyline points="7 10 12 15 17 10" />
+      <line x1="12" y1="15" x2="12" y2="3" />
+    </svg>
+  );
+}
+
+// Copy CSV / copy JSON / download CSV, aligned to the right of the result
+// header. The copy buttons flash a green "Copied" state for ~1.5s after a
+// successful clipboard write.
+function ResultActions({ result }: { result: Success }) {
+  const [copied, setCopied] = useState<"csv" | "json" | null>(null);
+  const resetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  if (result.fields.length === 0 || result.rows.length === 0) return null;
+
+  const copy = async (kind: "csv" | "json") => {
+    const text =
+      kind === "csv"
+        ? toCsv(result.fields, result.rows)
+        : JSON.stringify(result.rows, null, 2);
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(kind);
+      if (resetTimer.current) clearTimeout(resetTimer.current);
+      resetTimer.current = setTimeout(() => setCopied(null), 1500);
+    } catch {
+      // Clipboard can be unavailable (insecure context / denied permission);
+      // fail silently rather than throwing in an event handler.
+    }
+  };
+
+  const downloadCsv = () => {
+    const blob = new Blob([toCsv(result.fields, result.rows)], {
+      type: "text/csv;charset=utf-8;",
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "query-result.csv";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  const copyBtn = (kind: "csv" | "json", label: string) => {
+    const active = copied === kind;
+    return (
+      <button
+        type="button"
+        onClick={() => copy(kind)}
+        title={`Copy result as ${label}`}
+        aria-label={`Copy result as ${label}`}
+        className={
+          "inline-flex items-center gap-1 rounded border px-2 py-1 transition-colors " +
+          (active
+            ? "border-emerald-700 bg-emerald-950/40 text-emerald-300"
+            : "border-neutral-700 bg-neutral-900 text-neutral-300 hover:bg-neutral-800 hover:text-neutral-100")
+        }
+      >
+        {active ? <CheckIcon className="h-3.5 w-3.5" /> : <CopyIcon className="h-3.5 w-3.5" />}
+        <span className="font-medium">{active ? "Copied" : label}</span>
+      </button>
+    );
+  };
+
+  return (
+    <div className="ml-auto flex items-center gap-1.5">
+      {copyBtn("csv", "CSV")}
+      {copyBtn("json", "JSON")}
+      <button
+        type="button"
+        onClick={downloadCsv}
+        title="Export result as a CSV file"
+        aria-label="Export result as a CSV file"
+        className="inline-flex items-center gap-1 rounded border border-neutral-700 bg-neutral-900 px-2 py-1 text-neutral-300 transition-colors hover:bg-neutral-800 hover:text-neutral-100"
+      >
+        <DownloadIcon className="h-3.5 w-3.5" />
+        <span className="font-medium">Export</span>
+      </button>
+    </div>
+  );
+}
+
 function Result({ result }: { result: QueryResult }) {
   if (!result.ok) {
     return (
@@ -280,6 +407,7 @@ function Result({ result }: { result: QueryResult }) {
             Showing first {result.rows.length} rows
           </span>
         )}
+        <ResultActions result={result} />
       </div>
 
       {result.fields.length > 0 && result.rows.length > 0 ? (
