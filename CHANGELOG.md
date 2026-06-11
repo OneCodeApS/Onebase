@@ -8,6 +8,16 @@ While the project is on `0.x`, minor version bumps (`0.1 → 0.2`) may include b
 
 ## [Unreleased]
 
+### Added
+
+- **Built-in MCP server** at `api.*/mcp/v1` (Streamable HTTP, stateless) so AI coding agents (Claude Code, Cursor, VS Code) can work against an instance the way the Supabase MCP works against a Supabase project. 22 tools across database (list_tables, execute_sql, apply_migration + a new `_dashboard.migrations` ledger, generate_typescript_types), debugging (get_logs, get_advisors security lints, explain_query, verify_audit_chain), edge functions (list/get/deploy/invoke), storage, cron, and docs (search_docs, generate_client_snippet, get_api_url, get_anon_key). See `MCP-PLAN.md` for the design.
+- **Personal access tokens** — Admin → Access tokens. Hashed at rest, expiring, individually revocable, scope-limited, read-only by default; capabilities are additionally capped by the owner's current dashboard role at use time. The connect page renders ready-to-paste Claude Code / Cursor config.
+- **MCP safety rails** — SQL runs through the SQL editor's existing role ladder (read-only transaction / `dashboard_sql_rw` / admin); credentials, secrets, and the audit log are unreachable through raw MCP SQL; destructive statements require a confirm-token round-trip; all returned data is wrapped in prompt-injection boundaries; every tool call is rate-limited (new `mcp` area) and written to the hash-chained audit log, failing closed if the audit write fails. Threat model documented in `SECURITY.md`.
+
+### Database
+
+- **`0022_access_tokens.sql`** — `_dashboard.access_tokens`, the `_dashboard.migrations` ledger, and the `mcp` rate-limit seed. Idempotent; mirrored into `postgres/init/14_access_tokens.sql` for fresh installs.
+
 ## [2.0.0] - 2026-06-08
 
 A scaling + security release. Realtime now fans out over a single Postgres connection (thousands of concurrent subscribers cost one connection, not one each); the cron scheduler and audit-retention sweeper are leader-elected so the dashboard can run multiple replicas; and a full security audit's findings are fixed across storage, auth, the SQL editor, edge functions, and rate limiting. **Major-upgrade release: ships new migrations (`0019`–`0021`) and behaviour changes that affect existing API clients — read Breaking first.** Fresh installs need no migration step; the init scripts already include everything.

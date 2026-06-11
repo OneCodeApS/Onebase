@@ -90,7 +90,7 @@ docker compose cp caddy:/data/caddy/pki/authorities/local/root.crt ./caddy-root.
 ### 5. Use it
 
 - **Dashboard:** <https://dashboard.localhost> → sign in with the credentials from step 3.
-- **API:** <https://api.localhost/rest/v1/todos> → returns the seeded rows as JSON. Try `curl https://api.localhost/rest/v1/todos`. The API host also exposes `/rpc/v1/<fn>` (PostgREST RPC), `/auth/v1/*` (end-user auth), `/realtime` (SSE), and `/functions/v1/<name>` (edge functions).
+- **API:** <https://api.localhost/rest/v1/todos> → returns the seeded rows as JSON. Try `curl https://api.localhost/rest/v1/todos`. The API host also exposes `/rpc/v1/<fn>` (PostgREST RPC), `/auth/v1/*` (end-user auth), `/realtime` (SSE), `/functions/v1/<name>` (edge functions), and `/mcp/v1` (the built-in MCP server for AI coding agents — create a token under Admin → Access tokens, see `MCP-PLAN.md`).
 - **Storage:** <https://api.localhost/storage/v1> → POST to `/storage/v1/object/sign/<bucket>/<key>` (or `/upload/<bucket>/<key>`) to get a short-lived SigV4-signed URL, then GET/PUT directly. Caddy strips the `/storage/v1/object` prefix and forwards to internal MinIO; the dashboard never touches the byte stream. MinIO is no longer exposed under its own hostname.
 
 Direct DB access from the host (for psql, dbeaver, etc):
