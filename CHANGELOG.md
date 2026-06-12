@@ -8,6 +8,12 @@ While the project is on `0.x`, minor version bumps (`0.1 → 0.2`) may include b
 
 ## [Unreleased]
 
+## [2.0.1] - 2026-06-12
+
+### Added
+
+- **Views and materialized views now appear in the tables list.** The Tables sidebar previously listed only ordinary tables (`pg_class.relkind = 'r'`); it now also shows views (`v`) and materialized views (`m`), each with a `view` / `mview` badge. The table detail page badges them in the header and skips the "Row Level Security is off" warning, which doesn't apply to views. Dropping one issues the matching `DROP VIEW` / `DROP MATERIALIZED VIEW` instead of `DROP TABLE`.
+
 ## [2.0.0] - 2026-06-08
 
 A scaling + security release. Realtime now fans out over a single Postgres connection (thousands of concurrent subscribers cost one connection, not one each); the cron scheduler and audit-retention sweeper are leader-elected so the dashboard can run multiple replicas; and a full security audit's findings are fixed across storage, auth, the SQL editor, edge functions, and rate limiting. **Major-upgrade release: ships new migrations (`0019`–`0021`) and behaviour changes that affect existing API clients — read Breaking first.** Fresh installs need no migration step; the init scripts already include everything.

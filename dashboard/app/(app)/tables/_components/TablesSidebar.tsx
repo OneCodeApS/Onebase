@@ -8,8 +8,15 @@ import { TableRowMenu } from "./TableRowMenu";
 export type TableEntry = {
   schema: string;
   table_name: string;
+  // pg_class.relkind: 'r' ordinary table, 'v' view, 'm' materialized view.
+  relkind: string;
   approx_rows: number;
   rls_enabled: boolean;
+};
+
+const KIND_BADGE: Record<string, { label: string; title: string }> = {
+  v: { label: "view", title: "View" },
+  m: { label: "mview", title: "Materialized view" },
 };
 
 const DEFAULT_SCHEMA = "public";
@@ -180,8 +187,14 @@ export function TablesSidebar({
             // Only admins can drop tables, and never the platform-managed
             // system schemas (deleteTable refuses those server-side too).
             const canDelete = isAdmin && !SYSTEM_SCHEMAS.has(t.schema);
-            // RLS off on a non-system (API-exposed) table = effectively public.
-            const isPublic = !SYSTEM_SCHEMAS.has(t.schema) && !t.rls_enabled;
+            // RLS off on a non-system (API-exposed) *table* = effectively
+            // public. Views have no RLS of their own (access flows from the
+            // underlying tables / grants), so the dot would be misleading.
+            const isPublic =
+              t.relkind === "r" &&
+              !SYSTEM_SCHEMAS.has(t.schema) &&
+              !t.rls_enabled;
+            const kindBadge = KIND_BADGE[t.relkind];
             return (
               <div
                 key={`${t.schema}.${t.table_name}`}
@@ -199,6 +212,14 @@ export function TablesSidebar({
                 >
                   <span className="flex min-w-0 flex-1 items-center gap-1.5">
                     <span className="truncate font-mono">{t.table_name}</span>
+                    {kindBadge && (
+                      <span
+                        title={kindBadge.title}
+                        className="shrink-0 rounded bg-neutral-800 px-1 text-[9px] font-medium uppercase leading-tight tracking-wide text-neutral-400"
+                      >
+                        {kindBadge.label}
+                      </span>
+                    )}
                     {isPublic && (
                       <span
                         title="Public — Row Level Security is off; rows are exposed through the API to any role you grant access"
@@ -215,7 +236,11 @@ export function TablesSidebar({
                 </Link>
                 {canDelete && (
                   <div className="pr-1">
-                    <TableRowMenu schema={t.schema} table={t.table_name} />
+                    <TableRowMenu
+                      schema={t.schema}
+                      table={t.table_name}
+                      relkind={t.relkind}
+                    />
                   </div>
                 )}
               </div>
