@@ -44,16 +44,27 @@ async function loadRowCount(schema: string, table: string): Promise<number> {
   return Number(rows[0]?.n ?? 0);
 }
 
-async function loadRlsEnabled(schema: string, table: string): Promise<boolean> {
-  const { rows } = await pool().query<{ rls: boolean }>(
-    `SELECT c.relrowsecurity AS rls
+// relkind ('r' table / 'v' view / 'm' materialized view) plus the RLS flag in
+// one read. RLS only ever applies to ordinary tables; views inherit access
+// from their underlying tables, so relrowsecurity is meaningless for them.
+async function loadRelInfo(
+  schema: string,
+  table: string,
+): Promise<{ relkind: string; rls: boolean }> {
+  const { rows } = await pool().query<{ relkind: string; rls: boolean }>(
+    `SELECT c.relkind::text AS relkind, c.relrowsecurity AS rls
        FROM pg_class c
        JOIN pg_namespace n ON n.oid = c.relnamespace
-      WHERE n.nspname = $1 AND c.relname = $2 AND c.relkind = 'r'`,
+      WHERE n.nspname = $1 AND c.relname = $2`,
     [schema, table],
   );
-  return rows[0]?.rls ?? false;
+  return { relkind: rows[0]?.relkind ?? "r", rls: rows[0]?.rls ?? false };
 }
+
+const KIND_LABEL: Record<string, string> = {
+  v: "View",
+  m: "Materialized view",
+};
 
 async function loadRows(
   schema: string,
@@ -266,15 +277,24 @@ export default async function TableRowsPage({
   const adminPage = ADMIN_PAGE[`${schema}.${name}`];
   // Tables are created without RLS by design. For non-system (API-exposed)
   // schemas we surface a warning so an exposed table isn't left wide open by
-  // accident — we don't force RLS on.
-  const rlsEnabled = isSystemSchema ? true : await loadRlsEnabled(schema, name);
+  // accident — we don't force RLS on. Views have no RLS of their own, so we
+  // skip both the query and the warning for them.
+  const { relkind, rls } = await loadRelInfo(schema, name);
+  const isView = relkind === "v" || relkind === "m";
+  const kindLabel = KIND_LABEL[relkind];
+  const rlsEnabled = isSystemSchema || isView ? true : rls;
 
   return (
     <main className="px-6 py-10">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-semibold">
+          <h1 className="flex items-center gap-2 text-2xl font-semibold">
             <span className="font-mono">{schema}.{name}</span>
+            {kindLabel && (
+              <span className="rounded bg-neutral-800 px-1.5 py-0.5 text-[11px] font-medium uppercase tracking-wide text-neutral-400">
+                {kindLabel}
+              </span>
+            )}
           </h1>
           <p className="mt-1 text-sm text-neutral-500">
             {total.toLocaleString()} {total === 1 ? "row" : "rows"} ·{" "}

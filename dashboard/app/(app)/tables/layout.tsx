@@ -11,15 +11,20 @@ const SYSTEM_SCHEMAS = new Set(["_dashboard", "auth"]);
 // Loads tables across every non-system schema in one shot. The sidebar
 // filters them client-side by the active `?schema=` param, so navigating
 // between schemas doesn't refetch.
+//
+// relkind 'r' = ordinary table, 'v' = view, 'm' = materialized view. Views
+// have no stored rows (reltuples is -1, rendered blank) and no RLS, so the
+// sidebar badges them and skips the RLS warning dot.
 async function loadTables(): Promise<TableEntry[]> {
   const { rows } = await pool().query<TableEntry>(
     `SELECT n.nspname              AS schema,
             c.relname              AS table_name,
+            c.relkind::text        AS relkind,
             c.reltuples::bigint    AS approx_rows,
             c.relrowsecurity       AS rls_enabled
        FROM pg_catalog.pg_class c
        JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-      WHERE c.relkind = 'r'
+      WHERE c.relkind IN ('r', 'v', 'm')
         AND n.nspname NOT IN ('pg_catalog', 'information_schema')
         AND n.nspname NOT LIKE 'pg_toast%'
         AND n.nspname NOT LIKE 'pg_temp%'
