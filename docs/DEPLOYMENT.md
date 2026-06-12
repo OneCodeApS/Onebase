@@ -1,6 +1,6 @@
 # Deployment Guide
 
-Step-by-step instructions for installing Onecodebase on a Linux server and keeping it up to date.
+Step-by-step instructions for installing Onebase on a Linux server and keeping it up to date.
 
 ## Contents
 
@@ -89,30 +89,30 @@ usermod -aG docker deploy
 
 ---
 
-### Step 5 — Clone the repository into `/opt/onecodebase`
+### Step 5 — Clone the repository into `/opt/onebase`
 
 ```bash
-mkdir -p /opt/onecodebase
-chown deploy:deploy /opt/onecodebase
-sudo -u deploy git clone https://github.com/OneCodeApS/Onecodebase.git /opt/onecodebase
+mkdir -p /opt/onebase
+chown deploy:deploy /opt/onebase
+sudo -u deploy git clone https://github.com/OneCodeApS/Onebase.git /opt/onebase
 ```
 
 ---
 
 ### Step 6 — Switch to the deploy user
 
-All remaining commands run as `deploy` from `/opt/onecodebase`.
+All remaining commands run as `deploy` from `/opt/onebase`.
 
 ```bash
 sudo -iu deploy
-cd /opt/onecodebase
+cd /opt/onebase
 ```
 
 ---
 
 ### Step 7 — Pin to a released version
 
-Check the [Releases page](https://github.com/OneCodeApS/Onecodebase/releases) for the latest version number, then:
+Check the [Releases page](https://github.com/OneCodeApS/Onebase/releases) for the latest version number, then:
 
 ```bash
 git fetch --tags
@@ -254,7 +254,7 @@ Postgres, MinIO, and Caddy keep running during an update — only the dashboard 
 
 ### Step 1 — Find the new version
 
-Open the [Releases page](https://github.com/OneCodeApS/Onecodebase/releases) and note the version you want, e.g. `0.2.0`.
+Open the [Releases page](https://github.com/OneCodeApS/Onebase/releases) and note the version you want, e.g. `0.2.0`.
 
 ---
 
@@ -268,7 +268,7 @@ On the same release page (or `CHANGELOG.md` in the repo), look for anything labe
 
 ```bash
 ssh deploy@203.0.113.10
-cd /opt/onecodebase
+cd /opt/onebase
 ```
 
 ---
@@ -308,7 +308,7 @@ Open the dashboard in your browser and sign in. Your existing admin credentials 
 Take a full backup before any risky operation — especially a Postgres major upgrade. `scripts/pg-backup.sh` dumps the **entire cluster** (every database plus all roles and their passwords) to a gzipped file:
 
 ```bash
-cd /opt/onecodebase
+cd /opt/onebase
 ./scripts/pg-backup.sh
 # → ./backups/onecodebase-pg18-20260527-141230.sql.gz
 ```
@@ -362,7 +362,7 @@ Edit `docker-compose.yml`:
 ### Step 3 — Run the upgrade script
 
 ```bash
-cd /opt/onecodebase
+cd /opt/onebase
 ./scripts/pg-major-upgrade.sh
 ```
 
@@ -394,7 +394,7 @@ Every released version is an immutable image tag. To revert:
 
 ```bash
 ssh deploy@203.0.113.10
-cd /opt/onecodebase
+cd /opt/onebase
 ./scripts/deploy.sh 0.1.0
 ```
 

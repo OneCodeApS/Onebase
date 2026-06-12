@@ -123,19 +123,29 @@ sudo usermod -aG docker <DEPLOY_USER>
 newgrp docker
 docker ps                                      # must succeed, no "permission denied"
 
-# Relocate the data-root to the big disk BEFORE pulling any image
+# Relocate the data-root to the big disk BEFORE pulling any image.
+# `data-root` alone is NOT enough on recent Docker: when the containerd image
+# store is active (the default), image layers live under /var/lib/containerd,
+# which `data-root` does not move — they end up on /var and fill it. Disabling
+# the containerd snapshotter keeps the classic overlay2 store under data-root,
+# so images land on the big disk too.
 sudo mkdir -p /data/docker
 sudo systemctl stop docker
 {
 echo '{'
-echo '  "data-root": "/data/docker"'
+echo '  "data-root": "/data/docker",'
+echo '  "features": { "containerd-snapshotter": false }'
 echo '}'
 } | sudo tee /etc/docker/daemon.json
 sudo systemctl start docker
 docker info | grep "Docker Root Dir"           # MUST print: /data/docker
+docker info | grep -i "storage driver"         # MUST print: overlay2 (not a containerd snapshotter)
 ```
 
-Do not proceed until `Docker Root Dir: /data/docker`.
+Do not proceed until `Docker Root Dir: /data/docker` **and** `Storage Driver: overlay2`. If a
+server was already brought up with the containerd image store on a too-small `/var`, don't
+re-pull — relocate the existing store instead (see UPDATE-BEHIND-APPS01.md → "Image pull fails
+with no space left on device").
 
 ---
 

@@ -1,4 +1,4 @@
-# Onecodebase
+# Onebase
 
 Self-hosted backend platform: Postgres + PostgREST + MinIO behind Caddy, with a custom Next.js admin dashboard.
 
@@ -198,22 +198,22 @@ sudo adduser --disabled-password --gecos "" deploy
 sudo usermod -aG docker deploy
 ```
 
-**4. Clone the repo into `/opt/onecodebase`.**
+**4. Clone the repo into `/opt/onebase`.**
 
 ```bash
-sudo mkdir -p /opt/onecodebase
-sudo chown deploy:deploy /opt/onecodebase
-sudo -u deploy git clone https://github.com/OneCodeApS/Onecodebase.git /opt/onecodebase
+sudo mkdir -p /opt/onebase
+sudo chown deploy:deploy /opt/onebase
+sudo -u deploy git clone https://github.com/OneCodeApS/Onebase.git /opt/onebase
 ```
 
 **5. Switch to the deploy user.** All remaining commands run as `deploy` from this directory.
 
 ```bash
 sudo -iu deploy
-cd /opt/onecodebase
+cd /opt/onebase
 ```
 
-**6. Pin to a released version.** Check the [Releases page](https://github.com/OneCodeApS/Onecodebase/releases) for the latest version number, then:
+**6. Pin to a released version.** Check the [Releases page](https://github.com/OneCodeApS/Onebase/releases) for the latest version number, then:
 
 ```bash
 git fetch --tags
@@ -297,7 +297,7 @@ Postgres, MinIO, and Caddy keep running during an update — only the dashboard 
 
 ### Steps
 
-**1. Find the new version.** Open the [Releases page](https://github.com/OneCodeApS/Onecodebase/releases) and note the version you want (e.g., `0.2.0`).
+**1. Find the new version.** Open the [Releases page](https://github.com/OneCodeApS/Onebase/releases) and note the version you want (e.g., `0.2.0`).
 
 **2. Read the release notes.** On the same release page (or `CHANGELOG.md`), look for anything marked **BREAKING** and follow any migration steps before continuing.
 
@@ -305,7 +305,7 @@ Postgres, MinIO, and Caddy keep running during an update — only the dashboard 
 
 ```bash
 ssh deploy@<server-ip>
-cd /opt/onecodebase
+cd /opt/onebase
 ```
 
 **4. Run the deploy script with the new version.**
@@ -350,7 +350,7 @@ The dashboard container is replaced with the older image; the database is untouc
 
 ## Maintainer notes
 
-If you're working on Onecodebase itself (not just self-hosting it):
+If you're working on Onebase itself (not just self-hosting it):
 
 The workflow at `.github/workflows/build.yml` is **manual-only**. Pushing to `master` does not trigger anything — you decide when to build by clicking **Run workflow** in the Actions tab.
 

@@ -1,4 +1,4 @@
-# Updating Onecodebase (behind APPS01)
+# Updating Onebase (behind APPS01)
 
 For servers deployed using [`DEPLOY-BEHIND-APPS01.md`](./DEPLOY-BEHIND-APPS01.md).
 
@@ -15,12 +15,12 @@ The [`CHANGELOG.md`](./CHANGELOG.md) entry for the target version is the source 
 
 ## Before you start (any upgrade)
 
-1. **Find the new version.** Open [Releases](https://github.com/OneCodeApS/Onecodebase/releases) and note the version, e.g. `1.0.0`.
+1. **Find the new version.** Open [Releases](https://github.com/OneCodeApS/Onebase/releases) and note the version, e.g. `1.0.0`.
 2. **Read the release notes.** `CHANGELOG.md` → the section for the target version. Flag anything under **Breaking** or **Database**.
 3. **SSH to the app server.**
    ```bash
    ssh onecode@<app-server-ip>
-   cd /opt/onecodebase
+   cd /opt/onebase
    ```
 
 ## One-time setup (skip if already done on this server)
@@ -125,7 +125,7 @@ ls -lh ~/backup-before-<version>-*.sql   # confirm it's not 0 bytes
 
 Keep the dump somewhere outside the server too (your laptop, S3 bucket, etc.) before continuing.
 
-> This section upgrades the **Onecodebase app** version. Upgrading the **Postgres engine** itself across a major (e.g. 18 → 19) is a separate, deliberate operation — see [Upgrading PostgreSQL (major version)](DEPLOYMENT.md#upgrading-postgresql-major-version) and `scripts/pg-major-upgrade.sh`.
+> This section upgrades the **Onebase app** version. Upgrading the **Postgres engine** itself across a major (e.g. 18 → 19) is a separate, deliberate operation — see [Upgrading PostgreSQL (major version)](DEPLOYMENT.md#upgrading-postgresql-major-version) and `scripts/pg-major-upgrade.sh`.
 
 ### 2. Pull the new config
 
@@ -226,7 +226,7 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml exec -T postgres
 If `scripts/deploy.sh` misbehaves for any reason, the steps it runs by hand:
 
 ```bash
-cd /opt/onecodebase
+cd /opt/onebase
 
 # Pin the new version in .env
 grep -v '^DASHBOARD_IMAGE_TAG=' .env > .env.tmp
@@ -245,10 +245,62 @@ docker image prune -f
 
 ---
 
+## Troubleshooting
+
+### Image pull fails with `no space left on device`
+
+Symptom — `deploy.sh` downloads the image but dies during extraction:
+
+```
+failed to extract layer ... no space left on device
+  write /var/lib/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/.../fs/...
+```
+
+The deploy did **not** complete — your old dashboard container keeps running (no downtime), and the dashboard header still shows the old version.
+
+**Cause.** When Docker uses the **containerd image store** (`docker info` shows `driver-type: io.containerd.snapshotter.v1`), image layers live under `/var/lib/containerd` — and the `data-root: /data/docker` setting does **not** move that. On these servers `/var` is a small partition, so layer extraction runs it out of space while `/data` sits nearly empty.
+
+Confirm it:
+
+```bash
+df -h                                                       # /var near 100%, /data mostly free
+docker info | grep -iE "root dir|storage driver|driver-type"
+docker system df                                            # if RECLAIMABLE is ~0B, pruning won't help
+```
+
+**Fix — relocate the containerd store to the big disk** (preserves existing images, no re-pull). This stops Docker, so the whole stack is down ~1–2 min; data is safe (volumes are on `/data/docker`):
+
+```bash
+sudo systemctl stop docker docker.socket
+sudo systemctl stop containerd
+
+# Copy the store to /data, keeping the original as a safety net
+sudo cp -a /var/lib/containerd /data/containerd
+sudo mv /var/lib/containerd /var/lib/containerd.old
+sudo ln -s /data/containerd /var/lib/containerd
+
+sudo systemctl start containerd
+sudo systemctl start docker
+
+# Verify, then re-run the upgrade
+ls -ld /var/lib/containerd          # -> /data/containerd
+docker ps                           # stack back up, all healthy
+./scripts/deploy.sh <version>       # extraction now lands on /data
+
+# Once confirmed healthy, reclaim /var:
+sudo rm -rf /var/lib/containerd.old
+```
+
+To prevent this on a fresh install, disable the containerd snapshotter in `daemon.json` from the
+start (`"features": { "containerd-snapshotter": false }`) so layers use overlay2 under `data-root`
+— see DEPLOY-DB-AND-APP.md → "Install Docker and relocate data-root".
+
+---
+
 ## Notes
 
 - **Migrations don't run automatically.** They're SQL files in `postgres/migrations/` that the operator applies (step 4 of the major-upgrade path). The dashboard container expects the schema to already match.
-- **Updates are dashboard-only.** Postgres / MinIO / Caddy version bumps are separate — those require explicit version bumps in `docker-compose.yml` and a full `up -d` for the affected service. Not part of a normal Onecodebase release.
-- **APPS01 doesn't need to change** for a Onecodebase upgrade. Its site file proxies by hostname, regardless of which dashboard version is behind it.
+- **Updates are dashboard-only.** Postgres / MinIO / Caddy version bumps are separate — those require explicit version bumps in `docker-compose.yml` and a full `up -d` for the affected service. Not part of a normal Onebase release.
+- **APPS01 doesn't need to change** for an Onebase upgrade. Its site file proxies by hostname, regardless of which dashboard version is behind it.
 - **The `postgres/init/*.sql` scripts only run on a fresh DB** (first ever boot of the Postgres volume). They contain the **complete schema** — every migration is folded back into them — so a fresh deploy comes up fully initialised with **no migration step needed**. Step 4 (Apply the migrations) is only for upgrading an **existing** install to a release that adds new migrations. The init scripts and `postgres/migrations/*.sql` are kept in lockstep and reach the identical end state, so running the migrations against a fresh DB is a harmless no-op.
 - **Heredoc with auto-indenting terminals**: if you're SSH'd from a client that auto-indents pasted content, multi-line `cat > file << EOF … EOF` blocks will hang because the `EOF` line gets indented. Use the `{ echo …; echo …; } > file` pattern instead — leading whitespace on `echo` lines is just bash syntax and doesn't end up in the file.
