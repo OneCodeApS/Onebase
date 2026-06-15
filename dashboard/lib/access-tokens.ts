@@ -211,6 +211,54 @@ export async function listTokens(): Promise<AccessTokenRow[]> {
   return rows;
 }
 
+// Edits a live token's rights in place. The token string is unchanged, so any
+// client (a project's committed .mcp.json) keeps working — verifyToken re-reads
+// scopes and read_only on every request, so the new rights apply on the next
+// MCP call. Returns the previous values for the audit row, or null if the id
+// didn't match a live (non-revoked) token. Scopes are stored as-is; what the
+// token can actually DO is still gated by scopeAllowed at use time (owner role
+// floor + read_only override), so any combination is safe to persist.
+export async function updateTokenScopes(input: {
+  id: string;
+  scopes: Scope[];
+  readOnly: boolean;
+}): Promise<{ name: string; previousScopes: Scope[]; previousReadOnly: boolean } | null> {
+  const scopes = [...new Set(input.scopes)];
+  if (scopes.length === 0 || !scopes.every(isScope)) {
+    throw new Error("At least one valid scope is required");
+  }
+
+  // The CTE snapshots the pre-update row so we can report what changed; the
+  // UPDATE then writes the new values to that same row.
+  const { rows } = await pool().query<{
+    name: string;
+    old_scopes: unknown;
+    old_read_only: boolean;
+  }>(
+    `WITH prev AS (
+       SELECT id, scopes AS old_scopes, read_only AS old_read_only
+         FROM _dashboard.access_tokens
+        WHERE id = $1 AND revoked_at IS NULL
+     )
+     UPDATE _dashboard.access_tokens t
+        SET scopes = $2::jsonb, read_only = $3
+       FROM prev
+      WHERE t.id = prev.id
+      RETURNING t.name, prev.old_scopes, prev.old_read_only`,
+    [input.id, JSON.stringify(scopes), input.readOnly],
+  );
+  const row = rows[0];
+  if (!row) return null;
+
+  return {
+    name: row.name,
+    previousScopes: Array.isArray(row.old_scopes)
+      ? (row.old_scopes as string[]).filter(isScope)
+      : [],
+    previousReadOnly: row.old_read_only,
+  };
+}
+
 // Soft revoke (keeps the row for the admin page's history). Returns the token
 // name for the audit row, or null if the id didn't match anything.
 export async function revokeToken(id: string): Promise<string | null> {

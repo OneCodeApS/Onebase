@@ -3,27 +3,7 @@
 import { useActionState, useState } from "react";
 import { createAccessToken, type CreateTokenResult } from "../actions";
 import { KeyDisplay } from "../../api-keys/_components/KeyDisplay";
-
-type ScopeOption = {
-  scope: string;
-  label: string;
-  write: boolean;
-};
-
-// Order mirrors lib/access-tokens.ts SCOPES; labels explain the blast radius.
-const SCOPE_OPTIONS: ScopeOption[] = [
-  { scope: "db:read", label: "Database — read (SELECT, introspection, types, advisors)", write: false },
-  { scope: "db:write", label: "Database — write (DML via restricted role, no DDL)", write: true },
-  { scope: "db:ddl", label: "Database — DDL (apply_migration, schema changes)", write: true },
-  { scope: "functions:read", label: "Edge functions — read (config + code)", write: false },
-  { scope: "functions:write", label: "Edge functions — deploy (code runs with full DB access)", write: true },
-  { scope: "functions:invoke", label: "Edge functions — invoke (test calls)", write: true },
-  { scope: "storage:read", label: "Storage — read (buckets + policies)", write: false },
-  { scope: "storage:write", label: "Storage — write (bucket policies)", write: true },
-  { scope: "cron:read", label: "Cron — read", write: false },
-  { scope: "cron:write", label: "Cron — create/update jobs", write: true },
-  { scope: "logs:read", label: "Logs — audit log + chain verification", write: false },
-];
+import { SCOPE_OPTIONS } from "./scopes";
 
 export function CreateTokenForm() {
   const [state, formAction, pending] = useActionState<CreateTokenResult, FormData>(
@@ -33,6 +13,15 @@ export function CreateTokenForm() {
   const [readOnly, setReadOnly] = useState(true);
 
   if (state?.ok) {
+    // The whole point of project scope: pasted once inside a repo, it writes a
+    // .mcp.json that every teammate (and every future session in that folder)
+    // picks up automatically — no re-running `claude mcp add`. The command is
+    // the same regardless of scopes; the rights are baked into the token, so
+    // we just spell them out below it.
+    const connectCommand =
+      `claude mcp add onebase --scope project --transport http ${state.mcpUrl} ` +
+      `--header "Authorization: Bearer ${state.token}"`;
+
     return (
       <div>
         <p className="text-sm text-neutral-300">
@@ -42,6 +31,22 @@ export function CreateTokenForm() {
           </strong>
         </p>
         <KeyDisplay value={state.token} sensitive />
+
+        <p className="mt-5 text-sm text-neutral-300">
+          Connect Claude Code to this instance
+        </p>
+        <p className="mt-1 text-xs text-neutral-500">
+          Run this inside the project folder. <span className="font-mono text-neutral-400">--scope project</span>{" "}
+          writes a <span className="font-mono text-neutral-400">.mcp.json</span> into the repo, so the connection
+          travels with the project — no need to run it again.
+        </p>
+        <KeyDisplay value={connectCommand} />
+        <p className="mt-2 text-xs text-neutral-500">
+          This token grants{" "}
+          <span className="font-mono text-neutral-300">{state.scopes.join(", ")}</span>
+          {state.readOnly ? " (read-only)" : " (read-write)"}.
+        </p>
+
         <p className="mt-3 text-xs text-neutral-500">
           Reload the page to create another token.
         </p>
