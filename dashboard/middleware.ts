@@ -71,6 +71,12 @@ function isStorageApi(pathname: string): boolean {
   return pathname.startsWith("/storage/v1/");
 }
 
+// MCP server — authenticates via personal access token (Authorization:
+// Bearer ob_pat_…) on every request; no dashboard session involved.
+function isMcpApi(pathname: string): boolean {
+  return pathname === "/mcp/v1" || pathname.startsWith("/mcp/v1/");
+}
+
 export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
@@ -79,7 +85,8 @@ export async function middleware(req: NextRequest) {
     isPublicAuthApi(pathname) ||
     isRealtimeApi(pathname) ||
     isFunctionsApi(pathname) ||
-    isStorageApi(pathname)
+    isStorageApi(pathname) ||
+    isMcpApi(pathname)
   ) {
     return NextResponse.next();
   }

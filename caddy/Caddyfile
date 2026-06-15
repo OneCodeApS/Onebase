@@ -14,6 +14,7 @@
 #   /auth/v1/*          → dashboard's end-user auth API
 #   /realtime           → dashboard's SSE stream
 #   /functions/v1/<fn>  → dashboard's edge-function router
+#   /mcp/v1             → dashboard's MCP server (PAT-authenticated AI agents)
 #
 # Storage is split: POST endpoints (URL issuance) hit the dashboard so it can
 # enforce bucket policy + JWT auth. Everything else under /storage/v1/object/
@@ -62,6 +63,11 @@
 		import dashboard_lb
 	}
 
+	# MCP server (AI agent access, PAT-authenticated) — see dashboard/app/mcp.
+	handle /mcp/v1* {
+		import dashboard_lb
+	}
+
 	# Storage URL-issuance endpoints — dashboard only.
 	handle /storage/v1/object/sign-batch {
 		import dashboard_lb
@@ -107,6 +113,9 @@
 		respond 404
 	}
 	handle /storage/v1/* {
+		respond 404
+	}
+	handle /mcp/* {
 		respond 404
 	}
 

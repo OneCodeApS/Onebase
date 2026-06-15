@@ -8,6 +8,17 @@ While the project is on `0.x`, minor version bumps (`0.1 → 0.2`) may include b
 
 ## [Unreleased]
 
+## [2.0.3] - 2026-06-15
+
+### Added
+
+- **Built-in MCP server** at `api.*/mcp/v1` (Streamable HTTP, stateless) so AI coding agents (Claude Code, Cursor, VS Code) can work against an instance the way the Supabase MCP works against a Supabase project. 22 tools across database (list_tables, execute_sql, apply_migration + a new `_dashboard.migrations` ledger, generate_typescript_types), debugging (get_logs, get_advisors security lints, explain_query, verify_audit_chain), edge functions (list/get/deploy/invoke), storage, cron, and docs (search_docs, generate_client_snippet, get_api_url, get_anon_key). See `MCP-PLAN.md` for the design.
+- **Personal access tokens** — Admin → Access tokens. Hashed at rest, expiring, individually revocable, scope-limited, read-only by default; capabilities are additionally capped by the owner's current dashboard role at use time. The connect page renders ready-to-paste Claude Code / Cursor config.
+- **MCP safety rails** — SQL runs through the SQL editor's existing role ladder (read-only transaction / `dashboard_sql_rw` / admin); credentials, secrets, and the audit log are unreachable through raw MCP SQL; destructive statements require a confirm-token round-trip; all returned data is wrapped in prompt-injection boundaries; every tool call is rate-limited (new `mcp` area) and written to the hash-chained audit log, failing closed if the audit write fails. Threat model documented in `SECURITY.md`.
+
+### Database
+
+- **`0022_access_tokens.sql`** — `_dashboard.access_tokens`, the `_dashboard.migrations` ledger, and the `mcp` rate-limit seed. Idempotent; mirrored into `postgres/init/14_access_tokens.sql` for fresh installs.
 ## [2.0.2] - 2026-06-12
 
 ### Added
