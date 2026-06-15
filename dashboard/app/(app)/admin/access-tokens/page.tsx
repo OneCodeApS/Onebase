@@ -2,7 +2,7 @@ import Link from "next/link";
 import { listTokens } from "@/lib/access-tokens";
 import { Card } from "../../_components/Card";
 import { CreateTokenForm } from "./_components/CreateTokenForm";
-import { revokeAccessToken } from "./actions";
+import { TokenRow } from "./_components/TokenRow";
 
 function fmt(d: Date | null): string {
   if (!d) return "—";
@@ -61,35 +61,18 @@ export default async function AccessTokensPage() {
               {tokens.map((t) => {
                 const dead = t.revoked_at !== null || new Date(t.expires_at) < new Date();
                 return (
-                  <tr key={t.id} className={`border-t border-neutral-800 ${dead ? "opacity-40" : ""}`}>
-                    <td className="py-1.5 pr-3 font-mono">{t.name}</td>
-                    <td className="py-1.5 pr-3">{t.owner_email}</td>
-                    <td className="py-1.5 pr-3 font-mono">{t.scopes.join(", ")}</td>
-                    <td className="py-1.5 pr-3">
-                      {t.revoked_at ? (
-                        <span className="text-red-400">revoked</span>
-                      ) : t.read_only ? (
-                        "read-only"
-                      ) : (
-                        <span className="text-amber-300">read-write</span>
-                      )}
-                    </td>
-                    <td className="py-1.5 pr-3">{fmt(t.expires_at)}</td>
-                    <td className="py-1.5 pr-3">{fmt(t.last_used_at)}</td>
-                    <td className="py-1.5 text-right">
-                      {!t.revoked_at && (
-                        <form action={revokeAccessToken}>
-                          <input type="hidden" name="id" value={t.id} />
-                          <button
-                            type="submit"
-                            className="rounded border border-red-900/50 px-2 py-0.5 text-red-300 hover:bg-red-950/30"
-                          >
-                            Revoke
-                          </button>
-                        </form>
-                      )}
-                    </td>
-                  </tr>
+                  <TokenRow
+                    key={t.id}
+                    id={t.id}
+                    name={t.name}
+                    ownerEmail={t.owner_email}
+                    scopes={t.scopes}
+                    readOnly={t.read_only}
+                    expires={fmt(t.expires_at)}
+                    lastUsed={fmt(t.last_used_at)}
+                    dead={dead}
+                    revoked={t.revoked_at !== null}
+                  />
                 );
               })}
             </tbody>
@@ -106,7 +89,7 @@ export default async function AccessTokensPage() {
         </p>
 
         <p className="mt-3 text-sm text-neutral-400">Claude Code</p>
-        <pre className="mt-1 overflow-x-auto rounded border border-neutral-800 bg-neutral-950 px-3 py-2 font-mono text-xs text-neutral-300">{`claude mcp add onebase --transport http ${mcpUrl} \\
+        <pre className="mt-1 overflow-x-auto rounded border border-neutral-800 bg-neutral-950 px-3 py-2 font-mono text-xs text-neutral-300">{`claude mcp add onebase --scope project --transport http ${mcpUrl} \\
   --header "Authorization: Bearer <token>"`}</pre>
 
         <p className="mt-3 text-sm text-neutral-400">

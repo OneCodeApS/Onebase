@@ -9,6 +9,7 @@ import {
   isWriteScope,
   mintToken,
   revokeToken,
+  updateTokenScopes,
   TOKEN_NAME,
   type Scope,
 } from "@/lib/access-tokens";
@@ -21,7 +22,7 @@ async function clientIp(): Promise<string | null> {
 }
 
 export type CreateTokenResult =
-  | { ok: true; token: string; name: string }
+  | { ok: true; token: string; name: string; mcpUrl: string; scopes: Scope[]; readOnly: boolean }
   | { ok: false; error: string }
   | null;
 
@@ -87,8 +88,79 @@ export async function createAccessToken(
     },
   });
 
+  // Build the ready-to-paste connect command for the success view. Same URL
+  // derivation as the page's "Connect an agent" card.
+  const apiUrl = (process.env.API_PUBLIC_URL ?? "https://api.example.com").replace(/\/+$/, "");
+  const mcpUrl = `${apiUrl}/mcp/v1`;
+
   revalidatePath("/admin/access-tokens");
-  return { ok: true, token: result.plaintext, name };
+  return { ok: true, token: result.plaintext, name, mcpUrl, scopes, readOnly };
+}
+
+export type UpdateTokenResult =
+  | { ok: true }
+  | { ok: false; error: string }
+  | null;
+
+// Edits the rights of an existing token in place. Every scope and the
+// read-only flag are set independently — no cross-disabling — because the
+// stored set is still gated by scopeAllowed (owner role + read_only) when the
+// token is actually used. The token string never changes, so clients keep
+// working without re-pasting their .mcp.json. Logged as access_token.update
+// with the before→after diff.
+export async function updateAccessToken(
+  _prev: UpdateTokenResult,
+  formData: FormData,
+): Promise<UpdateTokenResult> {
+  const session = await getSession();
+  if (session.role !== "admin") {
+    return { ok: false, error: "Admin only" };
+  }
+
+  const id = String(formData.get("id") ?? "");
+  if (!/^[0-9a-f-]{36}$/.test(id)) {
+    return { ok: false, error: "Invalid token id" };
+  }
+
+  const readOnly = formData.get("read_only") === "on";
+  const scopes = formData
+    .getAll("scopes")
+    .map(String)
+    .filter(isScope) as Scope[];
+
+  if (scopes.length === 0) {
+    return { ok: false, error: "Select at least one scope" };
+  }
+
+  let res: Awaited<ReturnType<typeof updateTokenScopes>>;
+  try {
+    res = await updateTokenScopes({ id, scopes, readOnly });
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
+  if (!res) {
+    return { ok: false, error: "Token not found or already revoked" };
+  }
+
+  await audit({
+    actor: session.email!,
+    actorId: session.userId,
+    role: "admin",
+    action: "access_token.update",
+    target: res.name,
+    ip: await clientIp(),
+    sessionId: session.sessionId ?? null,
+    metadata: {
+      token_id: id,
+      scopes,
+      read_only: readOnly,
+      previous_scopes: res.previousScopes,
+      previous_read_only: res.previousReadOnly,
+    },
+  });
+
+  revalidatePath("/admin/access-tokens");
+  return { ok: true };
 }
 
 export async function revokeAccessToken(formData: FormData): Promise<void> {
