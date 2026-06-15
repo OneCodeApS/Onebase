@@ -34,6 +34,14 @@ function redirectTables(error?: string, ok?: string): never {
   redirect(`/tables${qs ? "?" + qs : ""}`);
 }
 
+// pg_class.relkind → the matching DROP verb. Anything else is rejected rather
+// than silently treated as a table.
+const DROP_VERB: Record<string, string> = {
+  r: "DROP TABLE",
+  v: "DROP VIEW",
+  m: "DROP MATERIALIZED VIEW",
+};
+
 export async function deleteTable(formData: FormData) {
   const session = await getSession();
   if (session.role !== "admin") throw new Error("Admin only");
@@ -41,21 +49,25 @@ export async function deleteTable(formData: FormData) {
 
   const schema = String(formData.get("schema") ?? "").trim();
   const table = String(formData.get("table") ?? "").trim();
+  // Default to a table for backwards-compat with any caller that omits kind.
+  const kind = String(formData.get("kind") ?? "r").trim();
   const target = `${schema}.${table}`;
 
   try {
     if (!SAFE_IDENT.test(schema)) throw new Error("Unsafe schema identifier");
     if (!SAFE_IDENT.test(table)) throw new Error("Unsafe table identifier");
+    const dropVerb = DROP_VERB[kind];
+    if (!dropVerb) throw new Error(`Unsupported object kind: ${kind}`);
     if (PROTECTED_SCHEMAS.has(schema)) {
       throw new Error(
-        `Tables in "${schema}" are managed by the platform and can't be dropped here`,
+        `Objects in "${schema}" are managed by the platform and can't be dropped here`,
       );
     }
-    // RESTRICT (the default): the drop fails if other objects depend on the
-    // table, so an admin can't silently cascade away views / foreign keys with
-    // one click. Use the SQL editor for a deliberate CASCADE.
+    // RESTRICT (the default): the drop fails if other objects depend on this
+    // one, so an admin can't silently cascade away dependent views / foreign
+    // keys with one click. Use the SQL editor for a deliberate CASCADE.
     await pool().query(
-      `DROP TABLE ${quoteIdent(schema)}.${quoteIdent(table)}`,
+      `${dropVerb} ${quoteIdent(schema)}.${quoteIdent(table)}`,
     );
   } catch (e) {
     const msg = (e as Error).message.split("\n")[0];
@@ -68,7 +80,7 @@ export async function deleteTable(formData: FormData) {
       success: false,
       ip,
       sessionId: session.sessionId ?? null,
-      metadata: { error: msg, schema, table },
+      metadata: { error: msg, schema, table, kind },
     });
     redirectTables(msg);
   }
@@ -82,7 +94,7 @@ export async function deleteTable(formData: FormData) {
     success: true,
     ip,
     sessionId: session.sessionId ?? null,
-    metadata: { schema, table },
+    metadata: { schema, table, kind },
   });
 
   // "layout" so the sidebar's table list (loaded in tables/layout.tsx) drops

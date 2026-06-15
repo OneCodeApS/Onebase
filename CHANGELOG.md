@@ -8,6 +8,8 @@ While the project is on `0.x`, minor version bumps (`0.1 → 0.2`) may include b
 
 ## [Unreleased]
 
+## [2.0.3] - 2026-06-15
+
 ### Added
 
 - **Built-in MCP server** at `api.*/mcp/v1` (Streamable HTTP, stateless) so AI coding agents (Claude Code, Cursor, VS Code) can work against an instance the way the Supabase MCP works against a Supabase project. 22 tools across database (list_tables, execute_sql, apply_migration + a new `_dashboard.migrations` ledger, generate_typescript_types), debugging (get_logs, get_advisors security lints, explain_query, verify_audit_chain), edge functions (list/get/deploy/invoke), storage, cron, and docs (search_docs, generate_client_snippet, get_api_url, get_anon_key). See `MCP-PLAN.md` for the design.
@@ -17,6 +19,17 @@ While the project is on `0.x`, minor version bumps (`0.1 → 0.2`) may include b
 ### Database
 
 - **`0022_access_tokens.sql`** — `_dashboard.access_tokens`, the `_dashboard.migrations` ledger, and the `mcp` rate-limit seed. Idempotent; mirrored into `postgres/init/14_access_tokens.sql` for fresh installs.
+## [2.0.2] - 2026-06-12
+
+### Added
+
+- **Connect button in a new top header.** Every authenticated page now has a slim top bar with a green **Connect** button (Supabase-style). It opens a modal pre-filled with this install's real connection values — the public API URL (`API_PUBLIC_URL`) and the anon key — formatted as ready-to-paste environment variables. A framework picker (Next.js / Vite / Expo / Server) switches the env-var prefix (`NEXT_PUBLIC_` / `VITE_` / `EXPO_PUBLIC_` / none) so the `ONEBASE_URL` and `ONEBASE_ANON_KEY` lines match the target app, with copy buttons for the `.env` block and a framework-agnostic `fetch` usage snippet. The anon key is shown in the clear because it's a public, embeddable credential; the modal points to **Admin → API keys** for the server-side `service_role` key. The button degrades to hidden if `API_PUBLIC_URL` is unset or the anon key can't be minted, rather than breaking the page.
+
+## [2.0.1] - 2026-06-12
+
+### Added
+
+- **Views and materialized views now appear in the tables list.** The Tables sidebar previously listed only ordinary tables (`pg_class.relkind = 'r'`); it now also shows views (`v`) and materialized views (`m`), each with a `view` / `mview` badge. The table detail page badges them in the header and skips the "Row Level Security is off" warning, which doesn't apply to views. Dropping one issues the matching `DROP VIEW` / `DROP MATERIALIZED VIEW` instead of `DROP TABLE`.
 
 ## [2.0.0] - 2026-06-08
 
@@ -339,7 +352,8 @@ First milestone. Auth + reverse proxy + sample API working end-to-end. No dashbo
 - Session cookies are encrypted with `SESSION_SECRET` (≥32 chars enforced at module load).
 - Server actions on `/login` enforce same-origin posts (Next.js built-in).
 
-[Unreleased]: https://github.com/OneCodeApS/Onecodebase/compare/v1.3.5...HEAD
+[Unreleased]: https://github.com/OneCodeApS/Onecodebase/compare/v2.0.2...HEAD
+[2.0.2]: https://github.com/OneCodeApS/Onecodebase/releases/tag/v2.0.2
 [1.3.5]: https://github.com/OneCodeApS/Onecodebase/releases/tag/v1.3.5
 [1.3.2]: https://github.com/OneCodeApS/Onecodebase/releases/tag/v1.3.2
 [1.3.1]: https://github.com/OneCodeApS/Onecodebase/releases/tag/v1.3.1

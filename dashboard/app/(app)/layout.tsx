@@ -1,4 +1,5 @@
 import { getSession } from "@/lib/session";
+import { Header } from "./_components/Header";
 import { Sidebar } from "./_components/Sidebar";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
@@ -11,7 +12,10 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         email={session.email ?? ""}
         role={session.role ?? "read_only"}
       />
-      <main className="flex-1 overflow-y-auto">{children}</main>
+      <div className="flex flex-1 flex-col overflow-hidden">
+        <Header />
+        <main className="flex-1 overflow-y-auto">{children}</main>
+      </div>
     </div>
   );
 }

@@ -1,4 +1,4 @@
-# Deploying Onecodebase behind APPS01
+# Deploying Onebase behind APPS01
 
 OneCode's internal pattern: APPS01 in DMZ handles all public TLS via its native Caddy. App servers (this stack included) run in LAN and serve plain HTTP only. The two are bridged by a Miit firewall rule.
 
@@ -31,10 +31,10 @@ Internet → 109.200.76.147 (APPS01 + Caddy, TLS termination + Let's Encrypt)
 ### 1. On the app server: clone and configure
 
 ```bash
-sudo mkdir -p /opt/onecodebase
-sudo chown onecode:onecode /opt/onecodebase
-git clone https://github.com/OneCodeApS/Onecodebase.git /opt/onecodebase
-cd /opt/onecodebase
+sudo mkdir -p /opt/onebase
+sudo chown onecode:onecode /opt/onebase
+git clone https://github.com/OneCodeApS/Onebase.git /opt/onebase
+cd /opt/onebase
 git fetch --tags
 git checkout v0.1.0
 ```
