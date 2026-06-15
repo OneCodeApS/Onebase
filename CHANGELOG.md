@@ -8,6 +8,10 @@ While the project is on `0.x`, minor version bumps (`0.1 → 0.2`) may include b
 
 ## [Unreleased]
 
+## [2.0.4] - 2026-06-15
+
+- fix 404 error on mcp page
+
 ## [2.0.3] - 2026-06-15
 
 ### Added
