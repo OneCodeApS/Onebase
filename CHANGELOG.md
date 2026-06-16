@@ -8,13 +8,27 @@ While the project is on `0.x`, minor version bumps (`0.1 → 0.2`) may include b
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-06-16
+
+### Changed
+
+- **PostgREST now connects directly to Postgres instead of through PgBouncer.** It was routed through the transaction-mode pooler, which silently drops the session-level `LISTEN` PostgREST uses for schema-cache reloads — so the `pgrst` channel had to be disabled and any newly created table or column 404'd over `/rest/v1` until a manual `docker compose restart postgrest`. PostgREST self-pools (`PGRST_DB_POOL`) and reuses a bounded set of backends regardless of API traffic, so this does not change how it scales with users; PgBouncer is retained for the dashboard, serverless, and ad-hoc clients (and a comment on the service warns against routing PostgREST back through it). Prepared statements (`PGRST_DB_PREPARED_STATEMENTS`) are re-enabled now that connections aren't transaction-pooled — a small per-query win.
+
+### Fixed
+
+- **Newly created tables and columns no longer 404 over the REST API.** With PostgREST on a direct connection the `pgrst` `LISTEN` channel works again, and new DDL event triggers fire a schema-cache reload automatically (see Database), so a table created via the dashboard, SQL editor, or a migration is queryable at `/rest/v1/<table>` within a second — no restart required.
+
+### Database
+
+- **`0024_postgrest_reload.sql`** — `_dashboard.pgrst_reload()` plus `ddl_command_end` and `sql_drop` event triggers that `NOTIFY pgrst, 'reload schema'` after any schema change. Idempotent; mirrored into `postgres/init/16_postgrest_reload.sql` for fresh installs. On an **existing** install: apply `0024`, deploy the `postgrest` service change (direct connection + `PGRST_DB_CHANNEL_ENABLED=true`), and restart `postgrest` once to pick up the new config — after that, reloads are automatic.
+
 ## [2.1.0] - 2026-06-16
 
 ### Added
 
 - **Row search in the table browser** — a single-column filter (contains / equals) on a table's Data tab. Applied server-side and composed with keyset pagination, so it searches the whole table rather than just the loaded page. The value is always a bound parameter and the column is validated against the table's real columns, so a hand-crafted query string can't inject. Shown for keyset-paged tables (those with a single-column primary key).
 - **Add column from the table browser** — a trailing **+** column on the Data tab opens a right-side drawer to add a column. Admin-only, real tables in non-system schemas. Curated type allow-list (`text`, `integer`, `bigint`, `boolean`, `timestamptz`, `date`, `uuid`, `numeric`, `jsonb`) so the type fragment of the generated DDL is never user-controlled; optional `NOT NULL` (refused with a clear message on a table that already has rows). Audited as `table.add_column`.
-- **Adjustable API row cap** — Admin → Settings now has **API — max rows per request**. It writes PostgREST's in-database config (`pgrst.db_max_rows` on the `authenticator` role, via a `SECURITY DEFINER` helper since `dashboard_admin` can't `ALTER ROLE` directly) and persists the value for display. Because live reload is disabled behind PgBouncer (`db-channel-enabled=false`), the new value applies on the next `docker compose restart postgrest`; the page says so. A static default of `1000` (`PGRST_DB_MAX_ROWS`) caps fresh installs from first boot.
+- **Adjustable API row cap** — Admin → Settings now has **API — max rows per request**. It writes PostgREST's in-database config (`pgrst.db_max_rows` on the `authenticator` role, via a `SECURITY DEFINER` helper since `dashboard_admin` can't `ALTER ROLE` directly) and persists the value for display. The new value applies on the next `docker compose restart postgrest` (the page says so); the schema-cache reload re-enabled in 2.2.0 covers DDL, not this role-level config GUC. A static default of `1000` (`PGRST_DB_MAX_ROWS`) caps fresh installs from first boot.
 
 ### Changed
 
