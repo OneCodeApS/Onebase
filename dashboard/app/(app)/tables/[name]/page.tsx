@@ -9,6 +9,8 @@ import {
   type SchemaConstraint,
   type SchemaIndex,
 } from "../_components/SchemaPanel";
+import { RowFilter } from "../_components/RowFilter";
+import { AddColumnDrawer } from "../_components/AddColumnDrawer";
 import { getSession } from "@/lib/session";
 
 const PAGE_SIZE = 50;
@@ -44,21 +46,50 @@ async function loadRowCount(schema: string, table: string): Promise<number> {
   return Number(rows[0]?.n ?? 0);
 }
 
-// relkind ('r' table / 'v' view / 'm' materialized view) plus the RLS flag in
-// one read. RLS only ever applies to ordinary tables; views inherit access
-// from their underlying tables, so relrowsecurity is meaningless for them.
+// relkind ('r' table / 'v' view / 'm' materialized view), the RLS flag, and the
+// planner's row estimate in one read. RLS only ever applies to ordinary tables;
+// views inherit access from their underlying tables, so relrowsecurity is
+// meaningless for them. reltuples is the cheap estimate ANALYZE/VACUUM keeps on
+// pg_class — used to avoid an exact count(*) scan on large tables (see below).
 async function loadRelInfo(
   schema: string,
   table: string,
-): Promise<{ relkind: string; rls: boolean }> {
-  const { rows } = await pool().query<{ relkind: string; rls: boolean }>(
-    `SELECT c.relkind::text AS relkind, c.relrowsecurity AS rls
+): Promise<{ relkind: string; rls: boolean; reltuples: number }> {
+  const { rows } = await pool().query<{ relkind: string; rls: boolean; reltuples: string }>(
+    `SELECT c.relkind::text          AS relkind,
+            c.relrowsecurity         AS rls,
+            c.reltuples::bigint::text AS reltuples
        FROM pg_class c
        JOIN pg_namespace n ON n.oid = c.relnamespace
       WHERE n.nspname = $1 AND c.relname = $2`,
     [schema, table],
   );
-  return { relkind: rows[0]?.relkind ?? "r", rls: rows[0]?.rls ?? false };
+  return {
+    relkind: rows[0]?.relkind ?? "r",
+    rls: rows[0]?.rls ?? false,
+    // -1 means "never analyzed" — treat as unknown so we fall back to an exact count.
+    reltuples: Number(rows[0]?.reltuples ?? -1),
+  };
+}
+
+// The single-column primary key, or null when the table has no PK or a
+// composite one. Keyset pagination needs one unique, ordered column to seek on;
+// anything else falls back to OFFSET paging.
+async function loadPrimaryKeyColumn(schema: string, table: string): Promise<string | null> {
+  const { rows } = await pool().query<{ attname: string }>(
+    `SELECT a.attname AS attname
+       FROM pg_index i
+       JOIN pg_class c       ON c.oid = i.indrelid
+       JOIN pg_namespace n   ON n.oid = c.relnamespace
+       JOIN pg_attribute a   ON a.attrelid = c.oid AND a.attnum = ANY (i.indkey)
+      WHERE n.nspname = $1 AND c.relname = $2 AND i.indisprimary`,
+    [schema, table],
+  );
+  // Exactly one row = single-column PK. Zero = no PK, >1 = composite.
+  if (rows.length !== 1) return null;
+  const col = rows[0].attname;
+  // Belt-and-suspenders before we interpolate the name into a query.
+  return SAFE_IDENT.test(col) ? col : null;
 }
 
 const KIND_LABEL: Record<string, string> = {
@@ -78,6 +109,91 @@ async function loadRows(
   );
   return rows;
 }
+
+// Single-column row filter from the Data-tab UI. `col` is always validated
+// against the table's real columns (and SAFE_IDENT) before it gets here.
+type RowFilterSpec = { col: string; op: "contains" | "eq"; val: string };
+
+// Appends the filter predicate to `params` and returns its SQL fragment (or ""
+// when there's no filter). The value is always a bound parameter — only the
+// (validated) column name is interpolated. Comparing against `::text` keeps one
+// code path for every column type; it forgoes the column's index, which is fine
+// for an ad-hoc admin filter.
+function filterClause(filter: RowFilterSpec | null, params: unknown[]): string {
+  if (!filter) return "";
+  if (filter.op === "contains") {
+    params.push(`%${filter.val}%`);
+    return `"${filter.col}"::text ILIKE $${params.length}`;
+  }
+  params.push(filter.val);
+  return `"${filter.col}"::text = $${params.length}`;
+}
+
+// Keyset (cursor) pagination — seeks directly to `pk > cursor` instead of
+// walking OFFSET rows, so it stays fast at any depth on large tables. Always
+// fetches limit+1 rows so the caller can tell whether another page exists in
+// that direction. Returns rows in ascending PK order regardless of direction.
+// An optional single-column filter rides along as an extra WHERE predicate.
+type KeysetDir = "first" | "next" | "prev";
+
+async function loadRowsKeyset(
+  schema: string,
+  table: string,
+  pk: string,
+  dir: KeysetDir,
+  cursor: string | null,
+  limit: number,
+  filter: RowFilterSpec | null,
+): Promise<Record<string, unknown>[]> {
+  const probe = limit + 1;
+  const params: unknown[] = [];
+  const conds: string[] = [];
+  const fc = filterClause(filter, params);
+  if (fc) conds.push(fc);
+
+  if (dir === "prev" && cursor !== null) {
+    conds.push(`"${pk}" < $${params.push(cursor)}`);
+    const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
+    const lim = `$${params.push(probe)}`;
+    // Walk backwards (DESC) from the cursor, then flip to ASC for display.
+    const { rows } = await pool().query<Record<string, unknown>>(
+      `SELECT * FROM (
+         SELECT * FROM "${schema}"."${table}" ${where} ORDER BY "${pk}" DESC LIMIT ${lim}
+       ) s ORDER BY "${pk}" ASC`,
+      params,
+    );
+    return rows;
+  }
+  if (dir === "next" && cursor !== null) {
+    conds.push(`"${pk}" > $${params.push(cursor)}`);
+    const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
+    const lim = `$${params.push(probe)}`;
+    const { rows } = await pool().query<Record<string, unknown>>(
+      `SELECT * FROM "${schema}"."${table}" ${where} ORDER BY "${pk}" ASC LIMIT ${lim}`,
+      params,
+    );
+    return rows;
+  }
+  const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
+  const lim = `$${params.push(probe)}`;
+  const { rows } = await pool().query<Record<string, unknown>>(
+    `SELECT * FROM "${schema}"."${table}" ${where} ORDER BY "${pk}" ASC LIMIT ${lim}`,
+    params,
+  );
+  return rows;
+}
+
+// The cursor is the PK value of an edge row, carried in the URL. Stringify so
+// it round-trips through the query string; Postgres re-parses it against the
+// PK's real type on the next request.
+function cursorValue(v: unknown): string {
+  if (v instanceof Date) return v.toISOString();
+  return String(v);
+}
+
+// Threshold above which we trust pg_class.reltuples instead of paying for an
+// exact count(*). Below it, count(*) is sub-millisecond, so we keep it exact.
+const COUNT_EXACT_MAX = 50_000;
 
 // --- Schema introspection (for the Schema panel at the bottom) --------------
 // All three read pg_catalog with bound params (no identifier interpolation)
@@ -209,6 +325,30 @@ function pageHref(name: string, schema: string, page: number): string {
     : `/tables/${encodeURIComponent(name)}`;
 }
 
+// Keyset equivalent of pageHref: carries a single `after` or `before` cursor
+// (the PK of the page edge) instead of a page number, plus the active filter so
+// Prev/Next stay within the filtered set.
+function cursorHref(
+  name: string,
+  schema: string,
+  cur: { after?: string; before?: string },
+  filter: RowFilterSpec | null,
+): string {
+  const params = new URLSearchParams();
+  if (schema !== DEFAULT_SCHEMA) params.set("schema", schema);
+  if (cur.after) params.set("after", cur.after);
+  else if (cur.before) params.set("before", cur.before);
+  if (filter) {
+    params.set("fcol", filter.col);
+    params.set("fop", filter.op);
+    params.set("fval", filter.val);
+  }
+  const qs = params.toString();
+  return qs
+    ? `/tables/${encodeURIComponent(name)}?${qs}`
+    : `/tables/${encodeURIComponent(name)}`;
+}
+
 // Link for the top-level Data/Schema tabs. Preserves the active schema, drops
 // paging (the Schema tab has no pages), and omits the default `view=data`.
 function tabHref(name: string, schema: string, view: "data" | "schema"): string {
@@ -226,7 +366,18 @@ export default async function TableRowsPage({
   searchParams,
 }: {
   params: Promise<{ name: string }>;
-  searchParams: Promise<{ page?: string; schema?: string; view?: string }>;
+  searchParams: Promise<{
+    page?: string;
+    schema?: string;
+    view?: string;
+    after?: string;
+    before?: string;
+    fcol?: string;
+    fop?: string;
+    fval?: string;
+    ok?: string;
+    error?: string;
+  }>;
 }) {
   const { name: rawName } = await params;
   const sp = await searchParams;
@@ -247,17 +398,59 @@ export default async function TableRowsPage({
   if (columns.length === 0) notFound();
 
   const view = sp.view === "schema" ? "schema" : "data";
-  const page = Math.max(1, Number(sp.page ?? 1) || 1);
-  const offset = (page - 1) * PAGE_SIZE;
 
-  // The row count is cheap context for the header on both tabs; the row data
-  // and the schema introspection each load only when their tab is active.
-  const total = await loadRowCount(schema, name);
+  // Single-column filter from the Data-tab UI. Only honoured when the column is
+  // a real column of this table (and SAFE_IDENT) and a value was supplied — so a
+  // hand-crafted ?fcol can't inject anything; it just gets ignored.
+  const colNames = new Set(columns.map((c) => c.column_name));
+  const fcol = (sp.fcol ?? "").trim();
+  const fval = sp.fval ?? "";
+  const filter: RowFilterSpec | null =
+    fcol && fval !== "" && SAFE_IDENT.test(fcol) && colNames.has(fcol)
+      ? { col: fcol, op: sp.fop === "eq" ? "eq" : "contains", val: fval }
+      : null;
+
+  const isSystemSchema = SYSTEM_SCHEMAS.has(schema);
+  const adminPage = ADMIN_PAGE[`${schema}.${name}`];
+  // relkind / RLS / row-estimate in one read. Tables are created without RLS by
+  // design; for non-system (API-exposed) schemas we surface a warning so an
+  // exposed table isn't left wide open by accident — we don't force RLS on.
+  // Views have no RLS of their own, so we skip both the query and the warning.
+  const { relkind, rls, reltuples } = await loadRelInfo(schema, name);
+  const isView = relkind === "v" || relkind === "m";
+  const kindLabel = KIND_LABEL[relkind];
+  const rlsEnabled = isSystemSchema || isView ? true : rls;
+
+  // Estimated count on large tables, exact on small ones. An exact count(*)
+  // scans the whole relation — sub-millisecond at thousands of rows, a
+  // multi-second stall at millions. That stall (plus deep OFFSET) is what made
+  // pagination hang on large prod tables, so above COUNT_EXACT_MAX we trust the
+  // planner's estimate instead.
+  const useEstimate = reltuples >= 0 && reltuples > COUNT_EXACT_MAX;
+  const total = useEstimate ? reltuples : await loadRowCount(schema, name);
+
+  // Keyset paging needs a single-column PK on a real table (not a view). Views
+  // and PK-less / composite-PK tables fall back to OFFSET paging below.
+  const pkCol = isView ? null : await loadPrimaryKeyColumn(schema, name);
+
+  // The Data-tab "+" column (Add column) — admins only, real tables, never
+  // system schemas. addColumn re-checks all of this server-side regardless.
+  const canAddColumn = session.role === "admin" && !isSystemSchema && !isView;
 
   let rows: Record<string, unknown>[] = [];
   let schemaColumns: SchemaColumn[] = [];
   let indexes: SchemaIndex[] = [];
   let constraints: SchemaConstraint[] = [];
+
+  // Pagination state shared by both modes; populated per branch below.
+  let showPrev = false;
+  let showNext = false;
+  let prevHref = "";
+  let nextHref = "";
+  // Offset-mode-only position readout.
+  const page = Math.max(1, Number(sp.page ?? 1) || 1);
+  let from = 0;
+  let to = 0;
 
   if (view === "schema") {
     [schemaColumns, indexes, constraints] = await Promise.all([
@@ -265,27 +458,63 @@ export default async function TableRowsPage({
       loadIndexes(schema, name),
       loadConstraints(schema, name),
     ]);
+  } else if (pkCol) {
+    // --- Keyset mode ---------------------------------------------------------
+    const dir: KeysetDir = sp.before ? "prev" : sp.after ? "next" : "first";
+    const cursor = sp.before ?? sp.after ?? null;
+    const fetched = await loadRowsKeyset(schema, name, pkCol, dir, cursor, PAGE_SIZE, filter);
+    const hasExtra = fetched.length > PAGE_SIZE;
+
+    // Drop the probe row: forward queries keep the first PAGE_SIZE; the backward
+    // query keeps the last PAGE_SIZE (its extra row is the oldest of the batch).
+    if (dir === "prev") {
+      rows = hasExtra ? fetched.slice(fetched.length - PAGE_SIZE) : fetched;
+    } else {
+      rows = hasExtra ? fetched.slice(0, PAGE_SIZE) : fetched;
+    }
+
+    if (rows.length > 0) {
+      const firstPk = cursorValue(rows[0][pkCol]);
+      const lastPk = cursorValue(rows[rows.length - 1][pkCol]);
+      // Next exists if we found more going forward, or we arrived by going back.
+      showNext = dir === "prev" ? true : hasExtra;
+      // Prev exists if we arrived by going forward, or older rows still remain.
+      showPrev = dir === "next" ? true : dir === "prev" ? hasExtra : false;
+      nextHref = cursorHref(name, schema, { after: lastPk }, filter);
+      prevHref = cursorHref(name, schema, { before: firstPk }, filter);
+    }
   } else {
+    // --- Offset fallback (views, PK-less / composite-PK tables) --------------
+    const offset = (page - 1) * PAGE_SIZE;
     rows = await loadRows(schema, name, PAGE_SIZE, offset);
+    const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+    showPrev = page > 1;
+    showNext = page < totalPages;
+    prevHref = pageHref(name, schema, page - 1);
+    nextHref = pageHref(name, schema, page + 1);
+    from = total === 0 ? 0 : offset + 1;
+    to = Math.min(offset + rows.length, total);
   }
 
-  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
-  const from = total === 0 ? 0 : offset + 1;
-  const to = Math.min(offset + rows.length, total);
-
-  const isSystemSchema = SYSTEM_SCHEMAS.has(schema);
-  const adminPage = ADMIN_PAGE[`${schema}.${name}`];
-  // Tables are created without RLS by design. For non-system (API-exposed)
-  // schemas we surface a warning so an exposed table isn't left wide open by
-  // accident — we don't force RLS on. Views have no RLS of their own, so we
-  // skip both the query and the warning for them.
-  const { relkind, rls } = await loadRelInfo(schema, name);
-  const isView = relkind === "v" || relkind === "m";
-  const kindLabel = KIND_LABEL[relkind];
-  const rlsEnabled = isSystemSchema || isView ? true : rls;
-
   return (
-    <main className="px-6 py-10">
+    // h-full + flex column so the data table can flex to fill the leftover
+    // height and scroll internally — keeps the page itself from overflowing
+    // (no second, page-level vertical scrollbar).
+    <main className="flex h-full flex-col px-6 py-10">
+      {(sp.error || sp.ok) && (
+        <div className="mb-4">
+          {sp.error && (
+            <p className="rounded border border-red-900/50 bg-red-950/30 px-3 py-2 text-sm text-red-300">
+              {sp.error}
+            </p>
+          )}
+          {sp.ok && (
+            <p className="rounded border border-emerald-900/50 bg-emerald-950/30 px-3 py-2 text-sm text-emerald-300">
+              {sp.ok}
+            </p>
+          )}
+        </div>
+      )}
       <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="flex items-center gap-2 text-2xl font-semibold">
@@ -297,7 +526,9 @@ export default async function TableRowsPage({
             )}
           </h1>
           <p className="mt-1 text-sm text-neutral-500">
-            {total.toLocaleString()} {total === 1 ? "row" : "rows"} ·{" "}
+            {useEstimate && "~"}
+            {total.toLocaleString()} {total === 1 ? "row" : "rows"}
+            {useEstimate && " (estimated)"} ·{" "}
             {columns.length} {columns.length === 1 ? "column" : "columns"}
           </p>
         </div>
@@ -383,23 +614,41 @@ export default async function TableRowsPage({
           constraints={constraints}
         />
       ) : (
-        <>
-          <Card className="mt-6 overflow-x-auto">
+        <div className="mt-6 flex min-h-0 flex-1 flex-col">
+          {/* Filtering rides on the keyset query, so it's only offered for
+              keyset-paged tables (single-column PK), not the offset fallback. */}
+          {pkCol && (
+            <RowFilter
+              name={name}
+              schema={schema}
+              columns={columns}
+              current={filter}
+            />
+          )}
+          <Card className="mt-3 min-h-0 flex-1 overflow-auto">
             <table className="w-full border-collapse text-sm">
               <thead>
-                <tr className="border-b border-neutral-700 bg-neutral-800/60 text-left text-neutral-400">
+                <tr className="sticky top-0 z-10 border-b border-neutral-700 bg-neutral-800 text-left text-neutral-400">
                   {columns.map((c) => (
                     <th key={c.column_name} className="px-3 py-2 font-normal">
                       <div className="font-mono text-neutral-100">{c.column_name}</div>
                       <div className="text-xs text-neutral-500">{c.data_type}</div>
                     </th>
                   ))}
+                  {canAddColumn && (
+                    <th className="w-10 px-2 py-2 align-middle font-normal">
+                      <AddColumnDrawer schema={schema} table={name} />
+                    </th>
+                  )}
                 </tr>
               </thead>
               <tbody>
                 {rows.length === 0 ? (
                   <tr>
-                    <td colSpan={columns.length} className="px-3 py-6 text-center text-neutral-500">
+                    <td
+                      colSpan={columns.length + (canAddColumn ? 1 : 0)}
+                      className="px-3 py-6 text-center text-neutral-500"
+                    >
                       No rows.
                     </td>
                   </tr>
@@ -427,6 +676,7 @@ export default async function TableRowsPage({
                           </td>
                         );
                       })}
+                      {canAddColumn && <td className="w-10 px-2 py-2" aria-hidden="true" />}
                     </tr>
                   ))
                 )}
@@ -436,23 +686,37 @@ export default async function TableRowsPage({
 
           <nav className="mt-4 flex items-center justify-between text-sm text-neutral-400">
             <span>
-              {from}–{to} of {total.toLocaleString()}
+              {pkCol && filter ? (
+                <>Filtered by <span className="font-mono text-neutral-300">{filter.col}</span></>
+              ) : pkCol ? (
+                <>
+                  {useEstimate && "~"}
+                  {total.toLocaleString()} {total === 1 ? "row" : "rows"}
+                  {useEstimate && " (estimated)"}
+                </>
+              ) : (
+                <>
+                  {from}–{to} of {total.toLocaleString()}
+                </>
+              )}
             </span>
             <div className="flex gap-2">
-              {page > 1 && (
+              {showPrev && (
                 <Link
-                  href={pageHref(name, schema, page - 1)}
+                  href={prevHref}
                   className="rounded border border-neutral-700 px-2 py-1 hover:bg-neutral-800"
                 >
                   ← Prev
                 </Link>
               )}
-              <span className="px-2 py-1 text-neutral-500">
-                Page {page} of {totalPages}
-              </span>
-              {page < totalPages && (
+              {!pkCol && (
+                <span className="px-2 py-1 text-neutral-500">
+                  Page {page} of {Math.max(1, Math.ceil(total / PAGE_SIZE))}
+                </span>
+              )}
+              {showNext && (
                 <Link
-                  href={pageHref(name, schema, page + 1)}
+                  href={nextHref}
                   className="rounded border border-neutral-700 px-2 py-1 hover:bg-neutral-800"
                 >
                   Next →
@@ -460,7 +724,7 @@ export default async function TableRowsPage({
               )}
             </div>
           </nav>
-        </>
+        </div>
       )}
     </main>
   );

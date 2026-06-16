@@ -77,24 +77,39 @@ services:
     image: postgrest/postgrest:v12.2.3
     restart: unless-stopped
     environment:
-      # Routes via PgBouncer so PostgREST traffic is multiplexed too.
-      PGRST_DB_URI: postgres://authenticator:${AUTHENTICATOR_PASSWORD}@pgbouncer:6432/${POSTGRES_DB:-postgres}
+      # PostgREST connects DIRECTLY to Postgres (not via PgBouncer) — same as
+      # realtime. A direct *session* connection is what lets the schema-cache
+      # reload LISTEN channel (below) work; transaction-pooled connections drop
+      # it. PostgREST self-pools (PGRST_DB_POOL) and reuses a bounded set of
+      # backends regardless of how many app users hit the API, so fronting it
+      # with the transaction pooler bought ~nothing while breaking LISTEN AND
+      # prepared statements. PgBouncer is intentionally retained for the
+      # dashboard / serverless / ad-hoc clients — do NOT route PostgREST back
+      # through it (that reintroduces the "new tables 404 until restart" bug).
+      PGRST_DB_URI: postgres://authenticator:${AUTHENTICATOR_PASSWORD}@postgres:5432/${POSTGRES_DB:-postgres}
       PGRST_DB_SCHEMAS: public
       PGRST_DB_ANON_ROLE: anon
+      # Default cap on rows returned per REST request. Admins can override this
+      # at runtime from the dashboard (Settings), which writes an in-database
+      # config GUC on the authenticator role that overrides this env value on the
+      # next PostgREST restart. Without this, a single request could return an
+      # entire table.
+      PGRST_DB_MAX_ROWS: "${PGRST_DB_MAX_ROWS:-1000}"
       PGRST_JWT_SECRET: ${PGRST_JWT_SECRET:?PGRST_JWT_SECRET must be set}
       PGRST_OPENAPI_SERVER_PROXY_URI: ${API_PUBLIC_URL:-http://api.localhost}
       PGRST_DB_POOL: "30"
-      # PostgREST sets some startup params PgBouncer would otherwise reject.
-      # The pooler's ignore_startup_parameters covers extra_float_digits; this
-      # disables PostgREST's prepared-statement use so transaction-pooled
-      # connections can be reused freely.
-      PGRST_DB_PREPARED_STATEMENTS: "false"
-      # PostgREST's schema-cache reload uses LISTEN on the `pgrst` channel,
-      # which doesn't survive transaction-pooled connections. Disable it —
-      # schema changes require a `docker compose restart postgrest` instead.
-      PGRST_DB_CHANNEL_ENABLED: "false"
+      # Direct connection → prepared statements are safe (and faster). They were
+      # only disabled because transaction pooling reused connections across
+      # sessions.
+      PGRST_DB_PREPARED_STATEMENTS: "true"
+      # LISTEN on the `pgrst` channel works again on the direct session
+      # connection, so PostgREST auto-reloads its schema cache on NOTIFY. The DDL
+      # event triggers in postgres/init/16_postgrest_reload.sql (existing installs:
+      # migration 0024) fire that NOTIFY after every schema change, so new
+      # tables/columns appear under /rest/v1 with no manual restart.
+      PGRST_DB_CHANNEL_ENABLED: "true"
     depends_on:
-      pgbouncer:
+      postgres:
         condition: service_healthy
     networks:
       - backend
