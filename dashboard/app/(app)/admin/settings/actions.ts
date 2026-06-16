@@ -2,6 +2,7 @@
 
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
+import { pool } from "@/lib/db";
 import { getSession } from "@/lib/session";
 import { getSetting, setSetting } from "@/lib/settings";
 import { audit } from "@/lib/audit";
@@ -67,6 +68,55 @@ export async function updateAuditRetention(formData: FormData) {
   });
 
   const msg = n === 0 ? "Retention disabled (keep forever)" : `Retention: ${n} day(s)`;
+  redirect("/admin/settings?ok=" + encodeURIComponent(msg));
+}
+
+export async function updateApiMaxRows(formData: FormData) {
+  const session = await getSession();
+  if (session.role !== "admin") redirect("/");
+
+  const raw = String(formData.get("max_rows") ?? "").trim();
+
+  // Empty = clear the override and fall back to the PGRST_DB_MAX_ROWS default.
+  let n: number | null;
+  if (raw === "") {
+    n = null;
+  } else {
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed) || parsed < 1 || !Number.isInteger(parsed)) {
+      redirect(
+        "/admin/settings?error=" +
+          encodeURIComponent(
+            "Max rows must be a positive integer, or empty to use the default.",
+          ),
+      );
+    }
+    n = parsed;
+  }
+
+  const previous = await getSetting<number>("api_max_rows");
+
+  // Write PostgREST's in-database config (a GUC on the authenticator role) via
+  // the SECURITY DEFINER helper — dashboard_admin can't ALTER ROLE directly.
+  // Persist the same value for display on the settings page.
+  await pool().query("SELECT _dashboard.set_api_max_rows($1)", [n]);
+  await setSetting("api_max_rows", n, session.userId ?? null);
+
+  await audit({
+    actor: session.email!,
+    actorId: session.userId!,
+    role: "admin",
+    action: "settings.api_max_rows.update",
+    target: "api_max_rows",
+    ip: await clientIp(),
+    sessionId: session.sessionId ?? null,
+    metadata: { from: previous, to: n },
+  });
+
+  const msg =
+    n === null
+      ? "API max rows reset to the default. Restart PostgREST to apply."
+      : `API max rows set to ${n}. Restart PostgREST to apply.`;
   redirect("/admin/settings?ok=" + encodeURIComponent(msg));
 }
 

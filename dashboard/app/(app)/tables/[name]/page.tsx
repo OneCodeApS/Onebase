@@ -9,6 +9,8 @@ import {
   type SchemaConstraint,
   type SchemaIndex,
 } from "../_components/SchemaPanel";
+import { RowFilter } from "../_components/RowFilter";
+import { AddColumnDrawer } from "../_components/AddColumnDrawer";
 import { getSession } from "@/lib/session";
 
 const PAGE_SIZE = 50;
@@ -108,10 +110,30 @@ async function loadRows(
   return rows;
 }
 
+// Single-column row filter from the Data-tab UI. `col` is always validated
+// against the table's real columns (and SAFE_IDENT) before it gets here.
+type RowFilterSpec = { col: string; op: "contains" | "eq"; val: string };
+
+// Appends the filter predicate to `params` and returns its SQL fragment (or ""
+// when there's no filter). The value is always a bound parameter — only the
+// (validated) column name is interpolated. Comparing against `::text` keeps one
+// code path for every column type; it forgoes the column's index, which is fine
+// for an ad-hoc admin filter.
+function filterClause(filter: RowFilterSpec | null, params: unknown[]): string {
+  if (!filter) return "";
+  if (filter.op === "contains") {
+    params.push(`%${filter.val}%`);
+    return `"${filter.col}"::text ILIKE $${params.length}`;
+  }
+  params.push(filter.val);
+  return `"${filter.col}"::text = $${params.length}`;
+}
+
 // Keyset (cursor) pagination — seeks directly to `pk > cursor` instead of
 // walking OFFSET rows, so it stays fast at any depth on large tables. Always
 // fetches limit+1 rows so the caller can tell whether another page exists in
 // that direction. Returns rows in ascending PK order regardless of direction.
+// An optional single-column filter rides along as an extra WHERE predicate.
 type KeysetDir = "first" | "next" | "prev";
 
 async function loadRowsKeyset(
@@ -121,28 +143,42 @@ async function loadRowsKeyset(
   dir: KeysetDir,
   cursor: string | null,
   limit: number,
+  filter: RowFilterSpec | null,
 ): Promise<Record<string, unknown>[]> {
   const probe = limit + 1;
+  const params: unknown[] = [];
+  const conds: string[] = [];
+  const fc = filterClause(filter, params);
+  if (fc) conds.push(fc);
+
   if (dir === "prev" && cursor !== null) {
+    conds.push(`"${pk}" < $${params.push(cursor)}`);
+    const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
+    const lim = `$${params.push(probe)}`;
     // Walk backwards (DESC) from the cursor, then flip to ASC for display.
     const { rows } = await pool().query<Record<string, unknown>>(
       `SELECT * FROM (
-         SELECT * FROM "${schema}"."${table}" WHERE "${pk}" < $1 ORDER BY "${pk}" DESC LIMIT $2
+         SELECT * FROM "${schema}"."${table}" ${where} ORDER BY "${pk}" DESC LIMIT ${lim}
        ) s ORDER BY "${pk}" ASC`,
-      [cursor, probe],
+      params,
     );
     return rows;
   }
   if (dir === "next" && cursor !== null) {
+    conds.push(`"${pk}" > $${params.push(cursor)}`);
+    const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
+    const lim = `$${params.push(probe)}`;
     const { rows } = await pool().query<Record<string, unknown>>(
-      `SELECT * FROM "${schema}"."${table}" WHERE "${pk}" > $1 ORDER BY "${pk}" ASC LIMIT $2`,
-      [cursor, probe],
+      `SELECT * FROM "${schema}"."${table}" ${where} ORDER BY "${pk}" ASC LIMIT ${lim}`,
+      params,
     );
     return rows;
   }
+  const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
+  const lim = `$${params.push(probe)}`;
   const { rows } = await pool().query<Record<string, unknown>>(
-    `SELECT * FROM "${schema}"."${table}" ORDER BY "${pk}" ASC LIMIT $1`,
-    [probe],
+    `SELECT * FROM "${schema}"."${table}" ${where} ORDER BY "${pk}" ASC LIMIT ${lim}`,
+    params,
   );
   return rows;
 }
@@ -290,16 +326,23 @@ function pageHref(name: string, schema: string, page: number): string {
 }
 
 // Keyset equivalent of pageHref: carries a single `after` or `before` cursor
-// (the PK of the page edge) instead of a page number.
+// (the PK of the page edge) instead of a page number, plus the active filter so
+// Prev/Next stay within the filtered set.
 function cursorHref(
   name: string,
   schema: string,
   cur: { after?: string; before?: string },
+  filter: RowFilterSpec | null,
 ): string {
   const params = new URLSearchParams();
   if (schema !== DEFAULT_SCHEMA) params.set("schema", schema);
   if (cur.after) params.set("after", cur.after);
   else if (cur.before) params.set("before", cur.before);
+  if (filter) {
+    params.set("fcol", filter.col);
+    params.set("fop", filter.op);
+    params.set("fval", filter.val);
+  }
   const qs = params.toString();
   return qs
     ? `/tables/${encodeURIComponent(name)}?${qs}`
@@ -329,6 +372,11 @@ export default async function TableRowsPage({
     view?: string;
     after?: string;
     before?: string;
+    fcol?: string;
+    fop?: string;
+    fval?: string;
+    ok?: string;
+    error?: string;
   }>;
 }) {
   const { name: rawName } = await params;
@@ -350,6 +398,17 @@ export default async function TableRowsPage({
   if (columns.length === 0) notFound();
 
   const view = sp.view === "schema" ? "schema" : "data";
+
+  // Single-column filter from the Data-tab UI. Only honoured when the column is
+  // a real column of this table (and SAFE_IDENT) and a value was supplied — so a
+  // hand-crafted ?fcol can't inject anything; it just gets ignored.
+  const colNames = new Set(columns.map((c) => c.column_name));
+  const fcol = (sp.fcol ?? "").trim();
+  const fval = sp.fval ?? "";
+  const filter: RowFilterSpec | null =
+    fcol && fval !== "" && SAFE_IDENT.test(fcol) && colNames.has(fcol)
+      ? { col: fcol, op: sp.fop === "eq" ? "eq" : "contains", val: fval }
+      : null;
 
   const isSystemSchema = SYSTEM_SCHEMAS.has(schema);
   const adminPage = ADMIN_PAGE[`${schema}.${name}`];
@@ -373,6 +432,10 @@ export default async function TableRowsPage({
   // Keyset paging needs a single-column PK on a real table (not a view). Views
   // and PK-less / composite-PK tables fall back to OFFSET paging below.
   const pkCol = isView ? null : await loadPrimaryKeyColumn(schema, name);
+
+  // The Data-tab "+" column (Add column) — admins only, real tables, never
+  // system schemas. addColumn re-checks all of this server-side regardless.
+  const canAddColumn = session.role === "admin" && !isSystemSchema && !isView;
 
   let rows: Record<string, unknown>[] = [];
   let schemaColumns: SchemaColumn[] = [];
@@ -399,7 +462,7 @@ export default async function TableRowsPage({
     // --- Keyset mode ---------------------------------------------------------
     const dir: KeysetDir = sp.before ? "prev" : sp.after ? "next" : "first";
     const cursor = sp.before ?? sp.after ?? null;
-    const fetched = await loadRowsKeyset(schema, name, pkCol, dir, cursor, PAGE_SIZE);
+    const fetched = await loadRowsKeyset(schema, name, pkCol, dir, cursor, PAGE_SIZE, filter);
     const hasExtra = fetched.length > PAGE_SIZE;
 
     // Drop the probe row: forward queries keep the first PAGE_SIZE; the backward
@@ -417,8 +480,8 @@ export default async function TableRowsPage({
       showNext = dir === "prev" ? true : hasExtra;
       // Prev exists if we arrived by going forward, or older rows still remain.
       showPrev = dir === "next" ? true : dir === "prev" ? hasExtra : false;
-      nextHref = cursorHref(name, schema, { after: lastPk });
-      prevHref = cursorHref(name, schema, { before: firstPk });
+      nextHref = cursorHref(name, schema, { after: lastPk }, filter);
+      prevHref = cursorHref(name, schema, { before: firstPk }, filter);
     }
   } else {
     // --- Offset fallback (views, PK-less / composite-PK tables) --------------
@@ -438,6 +501,20 @@ export default async function TableRowsPage({
     // height and scroll internally — keeps the page itself from overflowing
     // (no second, page-level vertical scrollbar).
     <main className="flex h-full flex-col px-6 py-10">
+      {(sp.error || sp.ok) && (
+        <div className="mb-4">
+          {sp.error && (
+            <p className="rounded border border-red-900/50 bg-red-950/30 px-3 py-2 text-sm text-red-300">
+              {sp.error}
+            </p>
+          )}
+          {sp.ok && (
+            <p className="rounded border border-emerald-900/50 bg-emerald-950/30 px-3 py-2 text-sm text-emerald-300">
+              {sp.ok}
+            </p>
+          )}
+        </div>
+      )}
       <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="flex items-center gap-2 text-2xl font-semibold">
@@ -538,7 +615,17 @@ export default async function TableRowsPage({
         />
       ) : (
         <div className="mt-6 flex min-h-0 flex-1 flex-col">
-          <Card className="min-h-0 flex-1 overflow-auto">
+          {/* Filtering rides on the keyset query, so it's only offered for
+              keyset-paged tables (single-column PK), not the offset fallback. */}
+          {pkCol && (
+            <RowFilter
+              name={name}
+              schema={schema}
+              columns={columns}
+              current={filter}
+            />
+          )}
+          <Card className="mt-3 min-h-0 flex-1 overflow-auto">
             <table className="w-full border-collapse text-sm">
               <thead>
                 <tr className="sticky top-0 z-10 border-b border-neutral-700 bg-neutral-800 text-left text-neutral-400">
@@ -548,12 +635,20 @@ export default async function TableRowsPage({
                       <div className="text-xs text-neutral-500">{c.data_type}</div>
                     </th>
                   ))}
+                  {canAddColumn && (
+                    <th className="w-10 px-2 py-2 align-middle font-normal">
+                      <AddColumnDrawer schema={schema} table={name} />
+                    </th>
+                  )}
                 </tr>
               </thead>
               <tbody>
                 {rows.length === 0 ? (
                   <tr>
-                    <td colSpan={columns.length} className="px-3 py-6 text-center text-neutral-500">
+                    <td
+                      colSpan={columns.length + (canAddColumn ? 1 : 0)}
+                      className="px-3 py-6 text-center text-neutral-500"
+                    >
                       No rows.
                     </td>
                   </tr>
@@ -581,6 +676,7 @@ export default async function TableRowsPage({
                           </td>
                         );
                       })}
+                      {canAddColumn && <td className="w-10 px-2 py-2" aria-hidden="true" />}
                     </tr>
                   ))
                 )}
@@ -590,7 +686,9 @@ export default async function TableRowsPage({
 
           <nav className="mt-4 flex items-center justify-between text-sm text-neutral-400">
             <span>
-              {pkCol ? (
+              {pkCol && filter ? (
+                <>Filtered by <span className="font-mono text-neutral-300">{filter.col}</span></>
+              ) : pkCol ? (
                 <>
                   {useEstimate && "~"}
                   {total.toLocaleString()} {total === 1 ? "row" : "rows"}

@@ -13,12 +13,15 @@
 -- without tying ownership to a single login role. An event trigger keeps any
 -- future public table owned by `app_owner` automatically.
 --
--- This runs after 04_sample_schema creates public.todos, as the `postgres`
--- superuser, on first boot only. The later feature scripts (09 and up) only
--- add tables in the _dashboard / auth schemas, which the event trigger below
--- intentionally ignores (it reassigns public tables only), so their position
--- after this file is fine. The matching migration for existing installs is
--- postgres/migrations/0016_app_owner_rls.sql.
+-- This runs as the `postgres` superuser on first boot only. Fresh installs
+-- start with an empty public schema (the old sample `todos` table was removed
+-- from 04_sample_schema.sql), so the reassignment loop below is usually a no-op
+-- on first boot — its real job is the event trigger, which keeps every table
+-- created later (by the dashboard, SQL editor, etc.) owned by app_owner. The
+-- later feature scripts (09 and up) only add tables in the _dashboard / auth
+-- schemas, which the event trigger intentionally ignores (it reassigns public
+-- tables only), so their position after this file is fine. The matching
+-- migration for existing installs is postgres/migrations/0016_app_owner_rls.sql.
 
 -- The shared owner role. NOLOGIN: it exists only to hold ownership.
 CREATE ROLE app_owner NOLOGIN;

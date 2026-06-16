@@ -81,6 +81,12 @@ services:
       PGRST_DB_URI: postgres://authenticator:${AUTHENTICATOR_PASSWORD}@pgbouncer:6432/${POSTGRES_DB:-postgres}
       PGRST_DB_SCHEMAS: public
       PGRST_DB_ANON_ROLE: anon
+      # Default cap on rows returned per REST request. Admins can override this
+      # at runtime from the dashboard (Settings), which writes an in-database
+      # config GUC on the authenticator role that overrides this env value on the
+      # next PostgREST restart. Without this, a single request could return an
+      # entire table.
+      PGRST_DB_MAX_ROWS: "${PGRST_DB_MAX_ROWS:-1000}"
       PGRST_JWT_SECRET: ${PGRST_JWT_SECRET:?PGRST_JWT_SECRET must be set}
       PGRST_OPENAPI_SERVER_PROXY_URI: ${API_PUBLIC_URL:-http://api.localhost}
       PGRST_DB_POOL: "30"
