@@ -84,7 +84,7 @@ A scaling + security release. Realtime now fans out over a single Postgres conne
 - **Edge functions with `verify_jwt` now require an authenticated caller by default.** A valid signature is no longer sufficient — the caller's token role must be ≥ the function's new `min_role` (default `authenticated`), so the public `anon` key alone no longer reaches a JWT-gated function. To allow anon on a specific function, set its **Minimum role** to `anon` (Admin → Edge functions → Overview), or turn Verify JWT off for truly-public functions.
 - **Storage signing is now bucket-visibility aware.** `authenticated` end-users may only sign GET/upload URLs for **public** buckets; **private** buckets require a `service_role` token (your backend signs on the user's behalf after its own check). Previously any authenticated user could sign for any object in any bucket.
 - **The SQL editor no longer lets `read_write` users run DDL.** `read_write` now runs under a restricted role (DML on all data, but no `CREATE`/`DROP`/`ALTER`/`TRUNCATE`/role management); `read_only` runs in a read-only transaction; `admin` keeps full access.
-- **Production compose runs 2 dashboard replicas** (`deploy.replicas: 2`). Set it back to `1` in `docker-compose.prod.yml` for a single-instance install. Caddy load-balances via a new `dashboard_lb` snippet — regenerate the HTTP-only Caddyfile from `DEPLOY-BEHIND-APPS01.md` step 2 if you maintain one by hand.
+- **Production compose runs 2 dashboard replicas** (`deploy.replicas: 2`). Set it back to `1` in `docker-compose.prod.yml` for a single-instance install. Caddy load-balances via a new `dashboard_lb` snippet — regenerate the HTTP-only Caddyfile from `docs/DEPLOY.md` (section 2.4) if you maintain one by hand.
 
 ### Database
 
@@ -103,7 +103,7 @@ Apply all new migrations (idempotent) before deploying the new image on an **exi
 
 ### Added
 
-- **Horizontal scaling for the dashboard** — the cron scheduler and audit-log retention sweeper are leader-elected via a Postgres advisory lock (`lib/scheduler.ts`), so exactly one replica runs them with automatic failover. Run N replicas behind Caddy (dynamic-upstream load balancing). See `DEPLOY-BEHIND-APPS01.md` → "Running multiple dashboard replicas".
+- **Horizontal scaling for the dashboard** — the cron scheduler and audit-log retention sweeper are leader-elected via a Postgres advisory lock (`lib/scheduler.ts`), so exactly one replica runs them with automatic failover. Run N replicas behind Caddy (dynamic-upstream load balancing). See `docs/OPERATIONS.md` → "Running multiple dashboard replicas".
 - **Realtime fan-out** — all SSE subscribers on a replica share one Postgres `LISTEN` connection (`lib/realtime-listener.ts`); concurrency is bounded by memory, not DB connections. Load-tested to 2000 concurrent streams on a single connection.
 - **Rate-limit settings** — Admin → Rate limits: per-area (sign in / sign up / magic link) configurable throttles, enforced in Postgres so they hold across replicas.
 - **Grants page** — Admin → Schema → Grants: table/view privileges per schema.
@@ -226,7 +226,7 @@ Fresh installs get Postgres 18 automatically and skip the middle step. The dashb
 ### Added
 
 - **Component versions page** — Settings → Versions (`/admin/system`). Reads the live versions of the running stack at page load: Dashboard / Next.js / React / Node.js (from the dashboard process), PostgreSQL (`version()`), PgBouncer (admin-console `SHOW VERSION`, using the existing `dashboard_admin` credentials it already has admin/stats rights for), PostgREST (its `Server` header via `POSTGREST_INTERNAL_URL`, default `http://postgrest:3000`), and MinIO (SigV4 admin-info call with the existing root credentials). Detection is best-effort and fault-isolated — a down or unreachable service shows `unavailable` rather than breaking the page. Caddy is listed as not runtime-detectable (it hides its version and its admin API is container-local). Admin-gated like the other `/admin/*` pages.
-- **Database backup & major-upgrade scripts** — `scripts/pg-backup.sh` dumps the whole cluster (all databases + roles) to a gzipped file under `./backups/`, and `scripts/pg-major-upgrade.sh` performs a safe dump-&-restore Postgres major upgrade with the stock image (back up → fresh cluster on the new major → restore in a throwaway container so the bundled `init/` scripts don't double-seed). Documented under [Upgrading PostgreSQL (major version)](DEPLOYMENT.md#upgrading-postgresql-major-version).
+- **Database backup & major-upgrade scripts** — `scripts/pg-backup.sh` dumps the whole cluster (all databases + roles) to a gzipped file under `./backups/`, and `scripts/pg-major-upgrade.sh` performs a safe dump-&-restore Postgres major upgrade with the stock image (back up → fresh cluster on the new major → restore in a throwaway container so the bundled `init/` scripts don't double-seed). Documented under [Upgrading PostgreSQL (major version)](docs/OPERATIONS.md#upgrading-postgresql-major-version).
 
 ### Changed
 
@@ -375,7 +375,7 @@ Dashboard milestone. Operator console now covers tables, SQL, storage, audit, en
 ### Breaking
 
 - `_dashboard.admins` renamed to `_dashboard.users` with a new `role` column; existing rows are mapped during the 0001 migration (`admin` preserved, `guest` mapped to `read_only`). Hard-coded `guest` role removed.
-- The dashboard's bundled Caddy is unchanged, but the project supports being fronted by an external reverse proxy (see `DEPLOY-BEHIND-APPS01.md`) — in that mode the Caddyfile is patched locally to serve plain HTTP only.
+- The dashboard's bundled Caddy is unchanged, but the project supports being fronted by an external reverse proxy (see `docs/DEPLOY.md` → Part 3 Option B) — in that mode the Caddyfile is patched locally to serve plain HTTP only.
 
 ## [0.1.0] - 2026-05-19
 

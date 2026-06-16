@@ -18,7 +18,7 @@ services:
     # (dashboard/lib/realtime-listener.ts), so each replica holds ~1 direct-to-
     # Postgres connection for realtime + 1 for the leader lock (leader only),
     # bypassing PgBouncer — scaling is no longer realtime-connection-bound.
-    # Override per-deploy with `--scale dashboard=N`. See DEPLOY-BEHIND-APPS01.md
+    # Override per-deploy with `--scale dashboard=N`. See docs/OPERATIONS.md
     # → "Running multiple dashboard replicas".
     deploy:
       replicas: 2

@@ -5,6 +5,10 @@ The canonical way OneCode deploys Onebase. The method is **always the same**:
 1. **Deploy the Onebase backend** — identical every time (Part 2).
 2. **Expose it through a Caddy front** — pick the front that fits (Part 3).
 
+> **This guide covers standing the stack up (install + topology).** Day-2 operations —
+> updating, backups & restore, Postgres major upgrades, rollback, HA, and troubleshooting —
+> live in [`OPERATIONS.md`](./OPERATIONS.md).
+
 ## The model
 
 - **BACKEND BOX** — runs the **entire Onebase stack** in Docker (Postgres, PgBouncer, PostgREST,
@@ -138,8 +142,8 @@ docker info | grep -i "storage driver"            # MUST print: overlay2 (not a 
 
 Do not proceed until `Docker Root Dir: /data/docker` **and** `Storage Driver: overlay2`. If a
 server was already brought up with the containerd image store on a too-small `/var`, don't
-re-pull — relocate the existing store instead (see UPDATE-BEHIND-APPS01.md → "Image pull fails
-with no space left on device").
+re-pull — relocate the existing store instead (see [`OPERATIONS.md`](./OPERATIONS.md) →
+"Image pull fails with no space left on device").
 
 ### 2.3 Clone the repo and pin a release
 
@@ -247,7 +251,7 @@ echo "AUTHENTICATOR_PASSWORD=$(openssl rand -hex 24)"
 echo "DASHBOARD_ADMIN_PASSWORD=$(openssl rand -hex 24)"
 echo "PGRST_JWT_SECRET=$(openssl rand -hex 32)"
 echo "FUNCTION_ENV_KEY=$(openssl rand -hex 32)"
-echo "MINIO_ROOT_USER=onecodebase"
+echo "MINIO_ROOT_USER=onebase"
 echo "MINIO_ROOT_PASSWORD=$(openssl rand -hex 24)"
 echo "SESSION_SECRET=$(openssl rand -hex 32)"
 echo "API_HOST=api.<PLATFORM>.<DOMAIN>"
@@ -352,8 +356,30 @@ sudo caddy validate --config /etc/caddy/Caddyfile
 
 ### Option B — Shared front (existing central Caddy box)
 
-A central Caddy already fronts several backends and has an `/etc/caddy/sites/` directory. Add one site
-file for this backend (do **not** reconfigure anything else on that box):
+A central Caddy already fronts several backends and has an `/etc/caddy/sites/` directory. This is
+OneCode's internal pattern, where a DMZ box (**APPS01**) handles all public TLS and each LAN backend
+serves plain HTTP only, bridged by a firewall rule:
+
+```
+Internet → <FRONT_PUB_IP> (APPS01 + Caddy, TLS termination + Let's Encrypt)
+            ↓ HTTP, internal LAN
+        <BACKEND_IP>:80 (this backend's bundled Caddy, routes by Host header)
+            ↓
+        postgrest:3000 / dashboard:3000 / minio:9000 (Docker)
+```
+
+- **Shared front (e.g. APPS01, in DMZ)** — public Caddy with Let's Encrypt. One `.caddy` site file per
+  backend's set of subdomains.
+- **Backend** (this stack, LAN) — Docker stack with internal Caddy serving plain HTTP. No public
+  exposure.
+- **Firewall** — must allow the front → backend on TCP 80. Open one rule per new backend.
+
+The backend is set up exactly as in Part 2 — the HTTP-only `caddy/Caddyfile` from 2.4 is what makes it
+front-agnostic. Tell git to ignore your local Caddyfile edit so later upgrades don't conflict
+(`git update-index --skip-worktree caddy/Caddyfile`) — see
+[`OPERATIONS.md`](./OPERATIONS.md#the-caddyfile-skip-worktree-workflow).
+
+Add one site file for this backend (do **not** reconfigure anything else on that box):
 
 ```bash
 sudo bash -c '{
@@ -378,6 +404,11 @@ sudo caddy validate --config /etc/caddy/Caddyfile
 ```
 
 > `import logging` must match the snippet the shared box already defines; drop those lines if it doesn't.
+
+> **Adding a backend to a shared front (per-backend checklist):** open a firewall rule
+> (front → new backend on TCP 80), create the two DNS A records pointing at `<FRONT_PUB_IP>`, deploy the
+> backend (Part 2) on the new box, add its `<PLATFORM>.caddy` site file here, then verify end-to-end
+> (Part 4).
 
 ### Both options — verify reachability, then start Caddy
 
@@ -445,41 +476,13 @@ Onebase dashboard. **The backend is untouched — one Onebase, many apps.**
 
 ---
 
-## Updating later
+## Day-2 operations
 
-On the **backend box**, switch to `master` and pin via the image tag so `scripts/deploy.sh` works (it
-only recreates the dashboard container; Postgres/MinIO/Caddy keep running):
+Updating, database backups & restore, Postgres major-version upgrades, rollback, HA, and the full
+troubleshooting reference all live in [`OPERATIONS.md`](./OPERATIONS.md). They're topology-agnostic — the
+backend is byte-for-byte the same under either front, so the same ops apply.
 
-```bash
-cd /opt/onebase
-git checkout master
-git update-index --skip-worktree caddy/Caddyfile   # keep your local HTTP-only Caddyfile
-./scripts/deploy.sh <new-version>
-```
-
-The front's Caddy is unaffected by Onebase upgrades.
-
-**Database backups, Postgres major-version upgrades, and rollbacks** are topology-agnostic and documented
-in [`DEPLOYMENT.md`](./DEPLOYMENT.md).
-
----
-
-## Troubleshooting
-
-- **`tls: internal error` during Let's Encrypt, citing a public IP** → inbound 80/443 for that IP reach
-  the **wrong box** (not this front). A NAT/port-forward problem (Part 1), not a Caddy problem. Prove it:
-  stop Caddy on the front and curl the public hostname on port 80 from outside — if something still
-  answers, you're routed to another box (e.g. two servers behind one public IP).
-- **`reload` fails on `localhost:2019`** → the front runs Caddy with `admin off`; use `restart`.
-- **`caddy validate` fails on `import logging`** → that snippet isn't defined; remove the
-  `import logging` lines.
-- **`PGRST000` / `could not look up local user`** → a password used base64. Regenerate with
-  `openssl rand -hex`, then `docker compose ... down -v` (the `-v` wipes the postgres volume so init
-  re-runs) and bring it back up.
-- **`docker pull` unauthorized** → the GHCR image must be Public, or `docker login ghcr.io` with a PAT
-  that has `read:packages`.
-- **Image name** → `v2.0.0` publishes `ghcr.io/onecodeaps/onecodebase-dashboard`; releases after the
-  "name change" commit publish `onebase-dashboard`. The compose file for the tag you check out already
-  references the right name.
-- **`docker compose down` without `-v` keeps old data** → Postgres init only runs on an empty data dir;
-  use `down -v` for a true reset (this destroys all data).
+> **Picking a `<VERSION>` to install — historical image name:** `v2.0.0` publishes
+> `ghcr.io/onecodeaps/onecodebase-dashboard`; releases after the "name change" commit publish
+> `onebase-dashboard`. The compose file for the tag you check out already references the right name, so
+> this only matters if you're pinning an old tag by hand.
