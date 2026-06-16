@@ -396,13 +396,13 @@ First milestone. Auth + reverse proxy + sample API working end-to-end. No dashbo
 - Session cookies are encrypted with `SESSION_SECRET` (≥32 chars enforced at module load).
 - Server actions on `/login` enforce same-origin posts (Next.js built-in).
 
-[Unreleased]: https://github.com/OneCodeApS/Onecodebase/compare/v2.0.2...HEAD
-[2.0.2]: https://github.com/OneCodeApS/Onecodebase/releases/tag/v2.0.2
-[1.3.5]: https://github.com/OneCodeApS/Onecodebase/releases/tag/v1.3.5
-[1.3.2]: https://github.com/OneCodeApS/Onecodebase/releases/tag/v1.3.2
-[1.3.1]: https://github.com/OneCodeApS/Onecodebase/releases/tag/v1.3.1
-[1.3.0]: https://github.com/OneCodeApS/Onecodebase/releases/tag/v1.3.0
-[1.2.0]: https://github.com/OneCodeApS/Onecodebase/releases/tag/v1.2.0
-[1.1.0]: https://github.com/OneCodeApS/Onecodebase/releases/tag/v1.1.0
-[1.0.0]: https://github.com/OneCodeApS/Onecodebase/releases/tag/v1.0.0
-[0.1.0]: https://github.com/OneCodeApS/Onecodebase/releases/tag/v0.1.0
+[Unreleased]: https://github.com/OneCodeApS/Onebase/compare/v2.0.2...HEAD
+[2.0.2]: https://github.com/OneCodeApS/Onebase/releases/tag/v2.0.2
+[1.3.5]: https://github.com/OneCodeApS/Onebase/releases/tag/v1.3.5
+[1.3.2]: https://github.com/OneCodeApS/Onebase/releases/tag/v1.3.2
+[1.3.1]: https://github.com/OneCodeApS/Onebase/releases/tag/v1.3.1
+[1.3.0]: https://github.com/OneCodeApS/Onebase/releases/tag/v1.3.0
+[1.2.0]: https://github.com/OneCodeApS/Onebase/releases/tag/v1.2.0
+[1.1.0]: https://github.com/OneCodeApS/Onebase/releases/tag/v1.1.0
+[1.0.0]: https://github.com/OneCodeApS/Onebase/releases/tag/v1.0.0
+[0.1.0]: https://github.com/OneCodeApS/Onebase/releases/tag/v0.1.0
