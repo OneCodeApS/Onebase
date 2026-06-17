@@ -1,4 +1,5 @@
 import { Client } from "pg";
+import type { RealtimeEvent } from "./realtime-rls";
 
 // In-process realtime fan-out hub.
 //
@@ -17,7 +18,16 @@ import { Client } from "pg";
 // reaches every replica's shared connection, so multi-replica fan-out is
 // automatic — each replica delivers to its own local subscribers.
 
-type Subscriber = (payload: string) => void;
+// A subscriber is either a plain delivery callback (basic mode) or one paired
+// with an authorizer (authorized mode). When `authorize` is present the hub
+// calls it with the parsed event and only delivers the raw payload if it
+// resolves true. `authzKey` lets the hub evaluate the decision once per distinct
+// identity per event and reuse it across subscribers that share it.
+type Subscriber = {
+  deliver: (payload: string) => void;
+  authorize?: (event: RealtimeEvent) => Promise<boolean> | boolean;
+  authzKey?: string;
+};
 
 const RECONNECT_MS = 2_000;
 
@@ -53,15 +63,7 @@ class RealtimeHub {
     client.on("notification", (msg: { channel: string; payload?: string }) => {
       const subs = this.channels.get(msg.channel);
       if (!subs) return;
-      const payload = msg.payload ?? "";
-      for (const fn of subs) {
-        // A slow or throwing subscriber must never block the others.
-        try {
-          fn(payload);
-        } catch {
-          /* ignore */
-        }
-      }
+      this.dispatch(subs, msg.payload ?? "");
     });
 
     const onDown = (err?: Error) => {
@@ -93,7 +95,63 @@ class RealtimeHub {
     return client;
   }
 
-  // Subscribe `fn` to a channel; returns an unsubscribe function. The shared
+  // Fans one notification out to a channel's subscribers. Basic subscribers get
+  // the raw payload immediately. Authorized subscribers are filtered by their
+  // `authorize` callback; the decision is computed once per distinct `authzKey`
+  // per event (many subscribers share a user identity) and reused. A failing or
+  // throwing authorizer fails closed (the event is dropped for that subscriber).
+  private dispatch(subs: Set<Subscriber>, payload: string): void {
+    let event: RealtimeEvent | null = null;
+    let parsed = false;
+    // Per-event memo of authorization decisions, keyed by authzKey.
+    let decisions: Map<string, Promise<boolean>> | null = null;
+
+    for (const sub of subs) {
+      if (!sub.authorize) {
+        try {
+          sub.deliver(payload);
+        } catch {
+          /* a slow/throwing subscriber must never block the others */
+        }
+        continue;
+      }
+
+      if (!parsed) {
+        parsed = true;
+        try {
+          event = JSON.parse(payload) as RealtimeEvent;
+        } catch {
+          event = null;
+        }
+      }
+      // Unparseable payload → fail closed for every authorized subscriber.
+      if (!event) continue;
+      const evt = event;
+
+      if (!decisions) decisions = new Map();
+      const key = sub.authzKey ?? "";
+      let decision = decisions.get(key);
+      if (!decision) {
+        decision = Promise.resolve()
+          .then(() => sub.authorize!(evt))
+          .catch(() => false);
+        decisions.set(key, decision);
+      }
+      decision
+        .then((ok) => {
+          if (ok) {
+            try {
+              sub.deliver(payload);
+            } catch {
+              /* ignore */
+            }
+          }
+        })
+        .catch(() => {});
+    }
+  }
+
+  // Subscribe to a channel; returns an unsubscribe function. The shared
   // connection LISTENs on the first subscriber to a channel and UNLISTENs when
   // the last one leaves.
   async subscribe(channel: string, fn: Subscriber): Promise<() => void> {

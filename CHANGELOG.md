@@ -8,6 +8,20 @@ While the project is on `0.x`, minor version bumps (`0.1 → 0.2`) may include b
 
 ## [Unreleased]
 
+## [2.4.0] - 2026-06-17
+
+### Added
+
+- **Realtime "authorized" mode — per-subscriber RLS filtering.** Each realtime table now has a mode (Admin → Realtime): **basic** (the previous behavior — every change broadcast to all subscribers, RLS not applied) or **authorized** (each event is filtered per-subscriber by the table's RLS SELECT policy before delivery). In authorized mode, before an event reaches a given subscriber, the fan-out hub asks Postgres to re-evaluate the table's SELECT policy for the changed row in *that subscriber's* auth context (`role authenticated` + their JWT's `request.jwt.claims`), over a dedicated non-BYPASSRLS `authenticator` connection — the same predicate PostgREST applies. A row a user cannot SELECT via REST can no longer reach them via realtime. INSERT/UPDATE are checked against the new row, DELETE against the old. The decision is computed once per distinct user identity per event and reused across that user's subscribers. The Admin → Realtime page gains Off / Basic / Authorized controls and shows each table's RLS status.
+
+### Security
+
+- **Closed a realtime confidentiality gap.** Previously the change stream was strictly table-level: any authenticated user who subscribed to an enabled table received every row's full payload, including rows their RLS SELECT policy forbids. Tables switched to authorized mode are now filtered per-subscriber. **Existing enabled tables migrate as `basic`, preserving current behavior** — opt sensitive tables into authorized mode (which requires RLS enabled on the table). Fail-closed throughout: an RLS error, an invalid/expired JWT, a truncated (>~8 KB) DELETE, or any inability to establish context drops the event rather than sending it. JWTs that expire mid-stream now stop delivery and emit an `event: token_expired` (the client must mint a fresh token and reconnect) instead of streaming on under a stale token. The RLS check never runs on a BYPASSRLS connection. The "RLS does NOT filter events" caution is retired for authorized-mode tables (security advisor and docs updated accordingly); it still stands for basic mode.
+
+### Database
+
+- **`0025_realtime_authorized.sql`** — adds `_dashboard.realtime_tables.mode`; `_dashboard.realtime_can_select(schema, table, row, keys, op, claims)` (SECURITY INVOKER, fail-closed) which combines the table's permissive/restrictive SELECT policies and evaluates them against the changed row as `authenticated`; helper functions `_dashboard._pk_cols` and `_dashboard._policy_applies`; an updated `_dashboard.realtime_notify` trigger that attaches the primary key to oversized (truncated) events so authorized mode can still filter them; and an `enable_realtime(schema, table, mode)` overload. Idempotent; mirrored into `postgres/init/09_realtime.sql` for fresh installs. On an **existing** install: apply `0025`, then set `REALTIME_RLS_DATABASE_URL` (an `authenticator` connection) on the `dashboard` service and restart it.
+
 ## [2.3.0] - 2026-06-17
 
 ### Added
