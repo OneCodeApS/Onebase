@@ -1,10 +1,12 @@
+import Link from "next/link";
 import { notFound } from "next/navigation";
 import { minio } from "@/lib/minio";
 import { getSession } from "@/lib/session";
-import { getBucketPolicy } from "@/lib/storage";
+import { FOLDER_PLACEHOLDER, getBucketPolicy, normalizePrefix } from "@/lib/storage";
 import { Card } from "../../_components/Card";
 import { ConfirmDeleteForm } from "../../_components/ConfirmDeleteForm";
 import { deleteBucket, uploadObject } from "../actions";
+import { NewFolderForm } from "./_components/NewFolderForm";
 import { ObjectList } from "./_components/ObjectList";
 import { SettingsModal } from "./_components/SettingsModal";
 
@@ -17,13 +19,22 @@ type ObjectEntry = {
   etag: string;
 };
 
-async function listObjects(bucket: string): Promise<ObjectEntry[]> {
+type Listing = { folders: string[]; files: ObjectEntry[] };
+
+// Lists a single level (non-recursive) under `prefix`. MinIO returns the
+// subfolders at this level as "common prefix" entries (obj.prefix) and the
+// files as regular objects (obj.name). The zero-byte folder placeholder for
+// the current folder is filtered out so it never shows as a file.
+async function listLevel(bucket: string, prefix: string): Promise<Listing> {
   return new Promise((resolve, reject) => {
-    const items: ObjectEntry[] = [];
-    const stream = minio.listObjectsV2(bucket, "", true);
+    const folders: string[] = [];
+    const files: ObjectEntry[] = [];
+    const stream = minio.listObjectsV2(bucket, prefix, false);
     stream.on("data", (obj) => {
-      if (obj.name) {
-        items.push({
+      if (obj.prefix) {
+        folders.push(obj.prefix);
+      } else if (obj.name && obj.name !== `${prefix}${FOLDER_PLACEHOLDER}`) {
+        files.push({
           name: obj.name,
           size: obj.size,
           lastModified: obj.lastModified,
@@ -31,7 +42,7 @@ async function listObjects(bucket: string): Promise<ObjectEntry[]> {
         });
       }
     });
-    stream.on("end", () => resolve(items));
+    stream.on("end", () => resolve({ folders, files }));
     stream.on("error", reject);
   });
 }
@@ -48,13 +59,15 @@ export default async function BucketPage({
   searchParams,
 }: {
   params: Promise<{ bucket: string }>;
-  searchParams: Promise<{ error?: string; ok?: string }>;
+  searchParams: Promise<{ error?: string; ok?: string; prefix?: string }>;
 }) {
   const { bucket: rawBucket } = await params;
   const sp = await searchParams;
   const bucket = decodeURIComponent(rawBucket);
 
   if (!SAFE_BUCKET.test(bucket)) notFound();
+
+  const prefix = normalizePrefix(sp.prefix);
 
   const session = await getSession();
   const canWrite = session.role !== "read_only";
@@ -69,11 +82,23 @@ export default async function BucketPage({
   }
   if (!exists) notFound();
 
-  const [objects, policy] = await Promise.all([
-    listObjects(bucket),
+  const [{ folders, files }, policy] = await Promise.all([
+    listLevel(bucket, prefix),
     getBucketPolicy(bucket),
   ]);
-  const totalSize = objects.reduce((sum, o) => sum + o.size, 0);
+  const totalSize = files.reduce((sum, o) => sum + o.size, 0);
+  const atRoot = prefix === "";
+  const isEmpty = folders.length === 0 && files.length === 0;
+
+  // Breadcrumb: bucket root + one crumb per path segment, each linking to its
+  // own cumulative prefix.
+  const segments = atRoot ? [] : prefix.replace(/\/$/, "").split("/");
+  const crumbs = segments.map((seg, i) => ({
+    label: seg,
+    href: `/storage/${encodeURIComponent(bucket)}?prefix=${encodeURIComponent(
+      segments.slice(0, i + 1).join("/") + "/",
+    )}`,
+  }));
 
   return (
     <main className="px-6 py-10">
@@ -99,7 +124,12 @@ export default async function BucketPage({
             </span>
           </div>
           <p className="mt-1 text-sm text-neutral-500">
-            {objects.length} {objects.length === 1 ? "object" : "objects"} ·{" "}
+            {folders.length > 0 && (
+              <>
+                {folders.length} {folders.length === 1 ? "folder" : "folders"} ·{" "}
+              </>
+            )}
+            {files.length} {files.length === 1 ? "object" : "objects"} ·{" "}
             {formatSize(totalSize)} · max upload {policy.max_upload_mb} MB
             {policy.allowed_mime && policy.allowed_mime.length > 0 && (
               <> · allowed: {policy.allowed_mime.join(", ")}</>
@@ -108,7 +138,7 @@ export default async function BucketPage({
         </div>
         <div className="flex gap-2">
           {isAdmin && <SettingsModal policy={policy} />}
-          {isAdmin && objects.length === 0 && (
+          {isAdmin && atRoot && isEmpty && (
             <ConfirmDeleteForm
               action={deleteBucket}
               triggerLabel="Delete bucket"
@@ -129,6 +159,35 @@ export default async function BucketPage({
         </div>
       </div>
 
+      {/* Folder breadcrumb */}
+      <nav className="mt-4 flex flex-wrap items-center gap-1 text-sm">
+        <Link
+          href={`/storage/${encodeURIComponent(bucket)}`}
+          className={`font-mono ${
+            atRoot
+              ? "text-neutral-300"
+              : "text-neutral-400 hover:text-neutral-100 hover:underline"
+          }`}
+        >
+          {bucket}
+        </Link>
+        {crumbs.map((c, i) => (
+          <span key={c.href} className="flex items-center gap-1">
+            <span className="text-neutral-600">/</span>
+            {i === crumbs.length - 1 ? (
+              <span className="font-mono text-neutral-300">{c.label}</span>
+            ) : (
+              <Link
+                href={c.href}
+                className="font-mono text-neutral-400 hover:text-neutral-100 hover:underline"
+              >
+                {c.label}
+              </Link>
+            )}
+          </span>
+        ))}
+      </nav>
+
       {sp.error && (
         <p className="mt-3 rounded border border-red-900/50 bg-red-950/30 px-3 py-2 text-sm text-red-300">
           {sp.error}
@@ -142,12 +201,23 @@ export default async function BucketPage({
 
       {canWrite && (
         <Card padded className="mt-6">
-          <h2 className="text-lg font-medium">Upload</h2>
+          <div className="flex items-center justify-between gap-3">
+            <h2 className="text-lg font-medium">
+              Upload
+              {!atRoot && (
+                <span className="ml-2 font-mono text-sm text-neutral-500">
+                  → {prefix}
+                </span>
+              )}
+            </h2>
+            <NewFolderForm bucket={bucket} prefix={prefix} />
+          </div>
           <form
             action={uploadObject}
             className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center"
           >
             <input type="hidden" name="bucket" value={bucket} />
+            <input type="hidden" name="prefix" value={prefix} />
             <input
               type="file"
               name="file"
@@ -165,7 +235,13 @@ export default async function BucketPage({
       )}
 
       <Card className="mt-6 overflow-x-auto">
-        <ObjectList bucket={bucket} objects={objects} canWrite={canWrite} />
+        <ObjectList
+          bucket={bucket}
+          prefix={prefix}
+          folders={folders}
+          files={files}
+          canWrite={canWrite}
+        />
       </Card>
     </main>
   );

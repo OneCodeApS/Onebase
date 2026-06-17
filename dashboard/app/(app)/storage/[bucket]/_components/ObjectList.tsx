@@ -1,6 +1,9 @@
 "use client";
 
+import Link from "next/link";
 import { useState } from "react";
+import { ConfirmDeleteForm } from "../../../_components/ConfirmDeleteForm";
+import { deleteFolder } from "../../actions";
 import { FileDetailPanel, type FileEntry } from "./FileDetailPanel";
 
 function formatSize(bytes: number): string {
@@ -10,19 +13,30 @@ function formatSize(bytes: number): string {
   return `${(bytes / 1024 ** 3).toFixed(2)} GB`;
 }
 
-// Client wrapper around the object table so a row click opens the detail
-// panel. The actual table layout stays the same — selection is just local
-// state, no URL change.
+// Renders one folder level: subfolder rows (navigate into / delete) followed by
+// file rows (click opens the detail panel). Names are shown relative to the
+// current prefix; the full key is kept for every action.
 export function ObjectList({
   bucket,
-  objects,
+  prefix,
+  folders,
+  files,
   canWrite,
 }: {
   bucket: string;
-  objects: FileEntry[];
+  prefix: string;
+  folders: string[];
+  files: FileEntry[];
   canWrite: boolean;
 }) {
   const [selected, setSelected] = useState<FileEntry | null>(null);
+  const isEmpty = folders.length === 0 && files.length === 0;
+
+  function folderHref(folderPrefix: string): string {
+    return `/storage/${encodeURIComponent(bucket)}?prefix=${encodeURIComponent(
+      folderPrefix,
+    )}`;
+  }
 
   return (
     <>
@@ -35,40 +49,95 @@ export function ObjectList({
           </tr>
         </thead>
         <tbody>
-          {objects.length === 0 ? (
+          {isEmpty ? (
             <tr>
               <td colSpan={3} className="px-3 py-6 text-center text-neutral-500">
-                Empty bucket.
+                {prefix ? "Empty folder." : "Empty bucket."}
               </td>
             </tr>
           ) : (
-            objects.map((o) => {
-              const isSelected = selected?.name === o.name;
-              const lm =
-                o.lastModified instanceof Date
-                  ? o.lastModified
-                  : new Date(o.lastModified);
-              return (
-                <tr
-                  key={o.name}
-                  data-storage-row
-                  onClick={() => setSelected(o)}
-                  className={`cursor-pointer border-b border-neutral-800 last:border-b-0 ${
-                    isSelected
-                      ? "bg-neutral-800/70"
-                      : "odd:bg-neutral-900 even:bg-neutral-950/40 hover:bg-neutral-800/50"
-                  }`}
-                >
-                  <td className="px-3 py-2 font-mono text-neutral-200">{o.name}</td>
-                  <td className="px-3 py-2 text-right font-mono text-neutral-400">
-                    {formatSize(o.size)}
-                  </td>
-                  <td className="px-3 py-2 font-mono text-xs text-neutral-500">
-                    {lm.toISOString().slice(0, 19).replace("T", " ")}
-                  </td>
-                </tr>
-              );
-            })
+            <>
+              {folders.map((f) => {
+                const base = f.slice(prefix.length).replace(/\/$/, "");
+                return (
+                  <tr
+                    key={f}
+                    data-storage-row
+                    className="border-b border-neutral-800 last:border-b-0 odd:bg-neutral-900 even:bg-neutral-950/40 hover:bg-neutral-800/50"
+                  >
+                    <td className="px-3 py-2">
+                      <Link
+                        href={folderHref(f)}
+                        className="flex items-center gap-2 font-mono text-neutral-100 hover:underline"
+                      >
+                        <span aria-hidden>📁</span>
+                        {base}/
+                      </Link>
+                    </td>
+                    <td className="px-3 py-2 text-right font-mono text-neutral-600">
+                      —
+                    </td>
+                    <td className="px-3 py-2">
+                      {canWrite && (
+                        <ConfirmDeleteForm
+                          action={deleteFolder}
+                          triggerLabel="Delete"
+                          triggerClassName="rounded border border-red-900/50 px-2 py-0.5 text-xs text-red-300 hover:bg-red-950/40"
+                          title="Delete folder?"
+                          message={
+                            <>
+                              Permanently delete the folder{" "}
+                              <span className="font-mono text-neutral-100">
+                                {base}/
+                              </span>{" "}
+                              and <strong>everything inside it</strong> from{" "}
+                              <span className="font-mono text-neutral-100">
+                                {bucket}
+                              </span>
+                              ? This cannot be undone.
+                            </>
+                          }
+                        >
+                          <input type="hidden" name="bucket" value={bucket} />
+                          <input type="hidden" name="folder" value={f} />
+                          <input type="hidden" name="prefix" value={prefix} />
+                        </ConfirmDeleteForm>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+              {files.map((o) => {
+                const base = o.name.slice(prefix.length);
+                const isSelected = selected?.name === o.name;
+                const lm =
+                  o.lastModified instanceof Date
+                    ? o.lastModified
+                    : new Date(o.lastModified);
+                return (
+                  <tr
+                    key={o.name}
+                    data-storage-row
+                    onClick={() => setSelected(o)}
+                    className={`cursor-pointer border-b border-neutral-800 last:border-b-0 ${
+                      isSelected
+                        ? "bg-neutral-800/70"
+                        : "odd:bg-neutral-900 even:bg-neutral-950/40 hover:bg-neutral-800/50"
+                    }`}
+                  >
+                    <td className="px-3 py-2 font-mono text-neutral-200">
+                      {base}
+                    </td>
+                    <td className="px-3 py-2 text-right font-mono text-neutral-400">
+                      {formatSize(o.size)}
+                    </td>
+                    <td className="px-3 py-2 font-mono text-xs text-neutral-500">
+                      {lm.toISOString().slice(0, 19).replace("T", " ")}
+                    </td>
+                  </tr>
+                );
+              })}
+            </>
           )}
         </tbody>
       </table>
@@ -76,6 +145,7 @@ export function ObjectList({
       {selected && (
         <FileDetailPanel
           bucket={bucket}
+          prefix={prefix}
           object={selected}
           canWrite={canWrite}
           onClose={() => setSelected(null)}

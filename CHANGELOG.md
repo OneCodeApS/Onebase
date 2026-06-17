@@ -8,6 +8,12 @@ While the project is on `0.x`, minor version bumps (`0.1 → 0.2`) may include b
 
 ## [Unreleased]
 
+## [2.3.0] - 2026-06-17
+
+### Added
+
+- **Nested folders in storage buckets** — the dashboard storage browser now supports Supabase-style folder hierarchies. Navigate into folders (tracked via a `?prefix=` query param with a clickable breadcrumb back to the bucket root), upload files into the folder you're viewing, and create empty folders with **New folder**. Folders are listed non-recursively so each level shows its subfolders (S3 *common prefixes*) above its files; an empty folder is materialised as a zero-byte `.emptyFolderPlaceholder` object that the listing hides. Deleting a folder removes every object beneath it (recursive). The `?prefix=` value is sanitised — leading/duplicate slashes are collapsed and any `..` traversal is rejected — so a folder prefix can never escape its bucket. The public storage API was already nesting-capable (the `/storage/v1/object/upload` and `/sign` routes accept multi-segment keys), so this change is dashboard-only; existing flat buckets are unaffected.
+
 ## [2.2.0] - 2026-06-16
 
 ### Changed

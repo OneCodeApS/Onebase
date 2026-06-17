@@ -122,11 +122,13 @@ function Preview({
 
 export function FileDetailPanel({
   bucket,
+  prefix,
   object,
   canWrite,
   onClose,
 }: {
   bucket: string;
+  prefix: string;
   object: FileEntry;
   canWrite: boolean;
   onClose: () => void;
@@ -136,6 +138,8 @@ export function FileDetailPanel({
   const [copied, setCopied] = useState(false);
   const panelRef = useRef<HTMLDivElement | null>(null);
   const kind = previewKind(object.name);
+  // Object.name is the full key (may include folders); show just the basename.
+  const displayName = object.name.split("/").pop() || object.name;
 
   // Fetch a share URL the moment the panel opens — used for both the preview
   // and the "copy share link" button below.
@@ -206,7 +210,7 @@ export function FileDetailPanel({
       <div className="flex items-start justify-between gap-3 border-b border-neutral-800 px-4 py-3">
         <div className="min-w-0 flex-1">
           <div className="truncate font-mono text-sm text-neutral-100" title={object.name}>
-            {object.name}
+            {displayName}
           </div>
           <div className="mt-0.5 text-xs text-neutral-500">
             {formatSize(object.size)} ·{" "}
@@ -277,6 +281,7 @@ export function FileDetailPanel({
             >
               <input type="hidden" name="bucket" value={bucket} />
               <input type="hidden" name="name" value={object.name} />
+              <input type="hidden" name="prefix" value={prefix} />
             </ConfirmDeleteForm>
           )}
         </div>

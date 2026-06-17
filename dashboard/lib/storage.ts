@@ -86,6 +86,40 @@ export function mimeAllowed(mime: string, allowed: string[] | null): boolean {
   });
 }
 
+// S3 has no real directories — a "folder" is just a shared key prefix. To make
+// an otherwise-empty folder visible we write a zero-byte object at
+// "<folder>/.emptyFolderPlaceholder" (same convention Supabase uses); the
+// listing hides it again.
+export const FOLDER_PLACEHOLDER = ".emptyFolderPlaceholder";
+
+// Normalises a folder prefix coming from the ?prefix= query param (or a form
+// field) into a value safe to hand MinIO as a listing prefix / key base. The
+// result is either "" (bucket root) or a path that always ends in "/". Leading
+// slashes are stripped, repeated slashes collapsed, and any "." / ".." segment
+// rejects the whole thing — the prefix must never escape the bucket.
+export function normalizePrefix(raw: string | undefined | null): string {
+  if (!raw) return "";
+  const segments = raw
+    .replace(/^\/+/, "")
+    .replace(/\/{2,}/g, "/")
+    .split("/")
+    .filter((s) => s.length > 0);
+  if (segments.length === 0) return "";
+  if (segments.some((s) => s === "." || s === "..")) return "";
+  return segments.join("/") + "/";
+}
+
+// Validates a single folder-name segment typed by a user (the "New folder"
+// field). One level only: no slashes, no dot-segments, no control characters,
+// no leading/trailing whitespace.
+export function isValidSegment(name: string): boolean {
+  if (name.length === 0 || name.length > 255) return false;
+  if (name === "." || name === "..") return false;
+  if (name !== name.trim()) return false;
+  // eslint-disable-next-line no-control-regex
+  return !/[/\\\x00-\x1f]/.test(name);
+}
+
 // AWS-style bucket policy MinIO accepts to allow anonymous GET on every
 // object. Mirrored to MinIO whenever a bucket is set to "public" — Caddy
 // strips /storage/v1/object before forwarding, so MinIO sees a regular

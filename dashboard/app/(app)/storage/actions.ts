@@ -6,8 +6,11 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { minio, publicObjectUrl, publicSignedObjectUrl } from "@/lib/minio";
 import {
+  FOLDER_PLACEHOLDER,
   getBucketPolicy,
+  isValidSegment,
   mimeAllowed,
+  normalizePrefix,
   publicReadPolicy,
   setBucketPolicy,
   type BucketPolicy,
@@ -47,6 +50,35 @@ async function clientIp(): Promise<string | null> {
   const fwd = h.get("x-forwarded-for");
   if (fwd) return fwd.split(",")[0].trim();
   return h.get("x-real-ip");
+}
+
+// Builds the bucket-page URL, preserving the current folder via ?prefix= and
+// tacking on any status params (error/ok). Used by every action that should
+// land the user back in the folder they were working in.
+function bucketHref(
+  bucket: string,
+  prefix: string,
+  params: Record<string, string> = {},
+): string {
+  const sp = new URLSearchParams();
+  if (prefix) sp.set("prefix", prefix);
+  for (const [k, v] of Object.entries(params)) sp.set(k, v);
+  const qs = sp.toString();
+  return `/storage/${bucket}${qs ? `?${qs}` : ""}`;
+}
+
+// Recursively collects every object key under a prefix — used to delete a
+// folder (S3 has no folder primitive, so we remove all keys beneath it).
+function listAllKeys(bucket: string, prefix: string): Promise<string[]> {
+  return new Promise((resolve, reject) => {
+    const keys: string[] = [];
+    const stream = minio.listObjectsV2(bucket, prefix, true);
+    stream.on("data", (o) => {
+      if (o.name) keys.push(o.name);
+    });
+    stream.on("end", () => resolve(keys));
+    stream.on("error", reject);
+  });
 }
 
 export async function createBucket(formData: FormData) {
@@ -120,12 +152,18 @@ export async function deleteBucket(formData: FormData) {
 export async function uploadObject(formData: FormData) {
   const session = await requireWritable();
   const bucket = String(formData.get("bucket") ?? "");
+  const prefix = normalizePrefix(String(formData.get("prefix") ?? ""));
   const file = formData.get("file") as File | null;
   const ip = await clientIp();
 
   if (!file || file.size === 0) {
-    redirect(`/storage/${bucket}?error=${encodeURIComponent("No file selected")}`);
+    redirect(bucketHref(bucket, prefix, { error: "No file selected" }));
   }
+
+  // The browser may report a path-ish name (e.g. directory uploads); keep only
+  // the basename and place it under the current folder prefix.
+  const filename = file!.name.split(/[\\/]/).pop() || file!.name;
+  const key = `${prefix}${filename}`;
 
   // Load policy and validate the file BEFORE streaming it to MinIO. Each
   // failed validation gets an audit row with the reason so attempts are
@@ -147,26 +185,26 @@ export async function uploadObject(formData: FormData) {
       actorId: session.userId,
       role: session.role!,
       action: "storage.object.upload",
-      target: `${bucket}/${file!.name}`,
+      target: `${bucket}/${key}`,
       success: false,
       ip,
       sessionId: session.sessionId ?? null,
       metadata: {
         bucket,
-        name: file!.name,
+        name: key,
         size: file!.size,
         content_type: contentType,
         reason: "policy_violation",
         detail: validationError,
       },
     });
-    redirect(`/storage/${bucket}?error=${encodeURIComponent(validationError)}`);
+    redirect(bucketHref(bucket, prefix, { error: validationError }));
   }
 
   let errMsg: string | null = null;
   try {
     const buffer = Buffer.from(await file!.arrayBuffer());
-    await minio.putObject(bucket, file!.name, buffer, file!.size, {
+    await minio.putObject(bucket, key, buffer, file!.size, {
       "Content-Type": contentType,
     });
   } catch (e) {
@@ -178,13 +216,13 @@ export async function uploadObject(formData: FormData) {
     actorId: session.userId,
     role: session.role!,
     action: "storage.object.upload",
-    target: `${bucket}/${file?.name ?? "?"}`,
+    target: `${bucket}/${key}`,
     success: !errMsg,
     ip,
     sessionId: session.sessionId ?? null,
     metadata: {
       bucket,
-      name: file?.name,
+      name: key,
       size: file?.size,
       content_type: contentType,
       ...(errMsg ? { error: errMsg } : {}),
@@ -192,16 +230,109 @@ export async function uploadObject(formData: FormData) {
   });
 
   if (errMsg) {
-    redirect(`/storage/${bucket}?error=${encodeURIComponent(errMsg)}`);
+    redirect(bucketHref(bucket, prefix, { error: errMsg }));
   }
   revalidatePath(`/storage/${bucket}`);
-  redirect(`/storage/${bucket}?ok=${encodeURIComponent(`Uploaded ${file!.name}`)}`);
+  redirect(bucketHref(bucket, prefix, { ok: `Uploaded ${filename}` }));
+}
+
+export async function createFolder(formData: FormData) {
+  const session = await requireWritable();
+  const bucket = String(formData.get("bucket") ?? "");
+  const prefix = normalizePrefix(String(formData.get("prefix") ?? ""));
+  const name = String(formData.get("name") ?? "").trim();
+  const ip = await clientIp();
+
+  if (!isValidSegment(name)) {
+    redirect(
+      bucketHref(bucket, prefix, {
+        error: "Folder name can't contain slashes or control characters",
+      }),
+    );
+  }
+
+  const folderPrefix = `${prefix}${name}/`;
+  const key = `${folderPrefix}${FOLDER_PLACEHOLDER}`;
+
+  let errMsg: string | null = null;
+  try {
+    // Zero-byte marker so the empty folder shows up in listings.
+    await minio.putObject(bucket, key, Buffer.from(""), 0);
+  } catch (e) {
+    errMsg = (e as Error).message;
+  }
+
+  await audit({
+    actor: session.email!,
+    actorId: session.userId,
+    role: session.role!,
+    action: "storage.folder.create",
+    target: `${bucket}/${folderPrefix}`,
+    success: !errMsg,
+    ip,
+    sessionId: session.sessionId ?? null,
+    metadata: errMsg ? { error: errMsg } : { bucket, folder: folderPrefix },
+  });
+
+  if (errMsg) {
+    redirect(bucketHref(bucket, prefix, { error: errMsg }));
+  }
+  revalidatePath(`/storage/${bucket}`);
+  // Drop the user into the folder they just created.
+  redirect(bucketHref(bucket, folderPrefix, { ok: `Created folder ${name}` }));
+}
+
+export async function deleteFolder(formData: FormData) {
+  const session = await requireWritable();
+  const bucket = String(formData.get("bucket") ?? "");
+  // The folder to remove (full prefix from bucket root).
+  const folder = normalizePrefix(String(formData.get("folder") ?? ""));
+  // Where to land afterwards (the parent folder the user was viewing).
+  const parent = normalizePrefix(String(formData.get("prefix") ?? ""));
+  const ip = await clientIp();
+
+  if (!folder) {
+    redirect(bucketHref(bucket, parent, { error: "No folder specified" }));
+  }
+
+  let errMsg: string | null = null;
+  let count = 0;
+  try {
+    const keys = await listAllKeys(bucket, folder);
+    count = keys.length;
+    if (keys.length > 0) await minio.removeObjects(bucket, keys);
+  } catch (e) {
+    errMsg = (e as Error).message;
+  }
+
+  await audit({
+    actor: session.email!,
+    actorId: session.userId,
+    role: session.role!,
+    action: "storage.folder.delete",
+    target: `${bucket}/${folder}`,
+    success: !errMsg,
+    ip,
+    sessionId: session.sessionId ?? null,
+    metadata: { bucket, folder, objects: count, ...(errMsg ? { error: errMsg } : {}) },
+  });
+
+  if (errMsg) {
+    redirect(bucketHref(bucket, parent, { error: errMsg }));
+  }
+  revalidatePath(`/storage/${bucket}`);
+  redirect(
+    bucketHref(bucket, parent, {
+      ok: `Deleted folder (${count} object${count === 1 ? "" : "s"})`,
+    }),
+  );
 }
 
 export async function deleteObject(formData: FormData) {
   const session = await requireWritable();
   const bucket = String(formData.get("bucket") ?? "");
   const name = String(formData.get("name") ?? "");
+  const prefix = normalizePrefix(String(formData.get("prefix") ?? ""));
   const ip = await clientIp();
 
   let errMsg: string | null = null;
@@ -224,10 +355,14 @@ export async function deleteObject(formData: FormData) {
   });
 
   if (errMsg) {
-    redirect(`/storage/${bucket}?error=${encodeURIComponent(errMsg)}`);
+    redirect(bucketHref(bucket, prefix, { error: errMsg }));
   }
   revalidatePath(`/storage/${bucket}`);
-  redirect(`/storage/${bucket}?ok=${encodeURIComponent(`Deleted ${name}`)}`);
+  redirect(
+    bucketHref(bucket, prefix, {
+      ok: `Deleted ${name.split("/").pop() ?? name}`,
+    }),
+  );
 }
 
 // Admin-updates the dashboard-side policy AND mirrors it to MinIO. If the
