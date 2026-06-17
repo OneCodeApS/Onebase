@@ -26,7 +26,7 @@
 # every 30s, so `--scale dashboard=N` is picked up live. With one replica it's a
 # no-op. The cron scheduler + audit-retention sweeper are leader-elected
 # (dashboard/lib/scheduler.ts), so running N replicas is safe. See
-# DEPLOY-BEHIND-APPS01.md → "Running multiple dashboard replicas".
+# docs/OPERATIONS.md → "Running multiple dashboard replicas".
 (dashboard_lb) {
 	reverse_proxy {
 		dynamic a {

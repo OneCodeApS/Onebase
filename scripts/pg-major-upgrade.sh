@@ -96,7 +96,7 @@ About to upgrade Postgres ${CUR_MAJOR} → ${NEW_MAJOR}. This will:
 Your safety net is the backup above:
   ${BACKUP}
 If anything goes wrong, you can restore it into the old image
-(revert the tag in docker-compose.yml) — see DEPLOYMENT.md.
+(revert the tag in docker-compose.yml) — see docs/OPERATIONS.md.
 
 WARN
 printf 'Type "yes" to proceed: ' >&2
