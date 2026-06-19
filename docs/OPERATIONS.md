@@ -461,7 +461,20 @@ Postgres connection, not one each. So each replica's direct-to-Postgres footprin
 connections that must bypass PgBouncer) is tiny and constant:
 
 - 1 realtime fan-out connection, plus
-- 1 leader-election connection (on the leader replica only).
+- 1 leader-election connection (on the leader replica only), plus
+- a small pool (≤10) of `authenticator` connections **only if** any table uses realtime
+  **authorized mode** — these run the per-subscriber RLS check
+  (`REALTIME_RLS_DATABASE_URL`, `dashboard/lib/realtime-rls.ts`). The pool stays empty when no
+  authorized-mode table is streaming.
+
+> **Realtime confidentiality (basic vs authorized).** A table's realtime mode (Admin →
+> Realtime) decides whether RLS filters the stream. **Basic** broadcasts every change to all
+> subscribers — RLS does *not* apply, so only use it for tables every subscriber may read.
+> **Authorized** re-evaluates the table's RLS SELECT policy for each changed row in each
+> subscriber's auth context before delivery (the same predicate REST uses), and requires RLS
+> enabled on the table. INSERT/UPDATE are checked against the new row, DELETE against the old;
+> anything unverifiable (oversize DELETEs, expired tokens, RLS errors) fails closed. The
+> `authenticator` connection above must never be pointed at a BYPASSRLS role.
 
 That's ~1–2 direct connections per replica, so you can scale `dashboard` well past 2 without
 approaching Postgres `max_connections` (**150**, in `docker-compose.yml`). PgBouncer-routed

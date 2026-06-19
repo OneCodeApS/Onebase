@@ -77,7 +77,11 @@ Bucket policy (visibility public/private, max upload MB, MIME allowlist) is set 
 
 Realtime must be enabled per table (Admin → Schema → Realtime; it installs a pg_notify trigger). Only per-user access JWTs are accepted — not the anon or service_role keys. Heartbeats every 25s keep proxies from killing idle streams; EventSource reconnects automatically.
 
-Caution: the stream is table-level, not row-level — RLS does NOT filter events. Don't enable realtime on tables whose rows individual users shouldn't all see.`,
+Each table runs in one of two modes:
+- basic — every change is broadcast to all subscribers. RLS does NOT filter events; use only for tables whose rows all subscribers may see.
+- authorized — each event is filtered per-subscriber by the table's RLS SELECT policy (the same predicate REST applies), so a row a user can't read via REST never reaches them via realtime. Requires RLS enabled on the table. INSERT/UPDATE are checked against the new row, DELETE against the old; anything unverifiable (including >8 KB DELETEs, expired tokens, or RLS errors) fails closed and is dropped.
+
+If the token expires mid-stream the server emits an event: token_expired and closes; mint a fresh token and open a new EventSource.`,
   },
   {
     slug: "functions",

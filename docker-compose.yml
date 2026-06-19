@@ -149,6 +149,11 @@ services:
       # Realtime LISTEN/NOTIFY needs a session-pinned connection, so it skips
       # PgBouncer entirely and talks straight to Postgres.
       REALTIME_DATABASE_URL: postgres://dashboard_admin:${DASHBOARD_ADMIN_PASSWORD}@postgres:5432/${POSTGRES_DB:-postgres}
+      # Realtime "authorized" mode re-checks RLS per subscriber. This MUST be a
+      # NON-bypassrls role — we use `authenticator` (same as PostgREST), and the
+      # check function does SET ROLE authenticated. NEVER point this at
+      # dashboard_admin/service_role or RLS would be bypassed.
+      REALTIME_RLS_DATABASE_URL: postgres://authenticator:${AUTHENTICATOR_PASSWORD}@postgres:5432/${POSTGRES_DB:-postgres}
       SESSION_SECRET: ${SESSION_SECRET:?SESSION_SECRET must be set}
       # Shared with PostgREST so JWTs signed here verify there and vice versa.
       # Used by /auth/v1/* (signing user tokens), /realtime (auth), and the

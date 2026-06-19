@@ -172,24 +172,48 @@ export async function runAdvisors(): Promise<Advisory[]> {
     }
   });
 
-  // Realtime streaming tables without RLS — the SSE stream sends full row
-  // data to any holder of a valid access token.
+  // Realtime confidentiality. 'basic' mode broadcasts full rows ignoring RLS;
+  // 'authorized' mode filters per-subscriber by the RLS SELECT policy but needs
+  // RLS actually enabled to deliver anything.
   await guard("realtime", async () => {
-    const { rows } = await pool().query<{ schema: string; table: string }>(
-      `SELECT "schema", "table" FROM _dashboard.realtime_tables WHERE enabled`,
+    const { rows } = await pool().query<{
+      schema: string;
+      table: string;
+      mode: string;
+    }>(
+      `SELECT "schema", "table", mode FROM _dashboard.realtime_tables WHERE enabled`,
     );
     for (const rt of rows) {
       const status = await listTablesRlsStatus(rt.schema);
       const t = status.find((s) => s.table === rt.table);
-      if (t && !t.rls_enabled) {
-        push({
-          level: "warn",
-          category: "realtime",
-          title: `Realtime is on for ${rt.schema}.${rt.table}, which has RLS disabled`,
-          detail:
-            "Every change (including full row data) is broadcast to any signed-in end user subscribed to the table.",
-        });
+      const rlsOn = !!t?.rls_enabled;
+
+      if (rt.mode === "authorized") {
+        // Authorized mode without RLS can't filter — it fails closed and
+        // delivers nothing, which is a broken (but not leaky) config.
+        if (!rlsOn) {
+          push({
+            level: "warn",
+            category: "realtime",
+            title: `Authorized realtime on ${rt.schema}.${rt.table} but RLS is disabled`,
+            detail:
+              "Authorized mode requires RLS to evaluate per-subscriber visibility. With RLS off it fails closed and delivers no events. Enable RLS with a SELECT policy, or switch the table to basic mode.",
+          });
+        }
+        // Authorized + RLS on: events are RLS-filtered per subscriber — no
+        // confidentiality warning (the old 'RLS does not filter' caution is
+        // retired for this table).
+        continue;
       }
+
+      // Basic mode: full rows go to every subscriber regardless of RLS.
+      push({
+        level: "warn",
+        category: "realtime",
+        title: `Realtime is in basic mode for ${rt.schema}.${rt.table}${rlsOn ? " (RLS not applied to the stream)" : " (RLS disabled)"}`,
+        detail:
+          "Basic mode broadcasts every change (including full row data) to any signed-in end user subscribed to the table — RLS does not filter the stream. Switch the table to authorized mode (Admin → Realtime) to filter events per-subscriber by its RLS SELECT policy.",
+      });
     }
   });
 

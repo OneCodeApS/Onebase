@@ -9,6 +9,7 @@ import {
   disableRealtime,
   enableRealtime,
   SAFE_IDENT,
+  type RealtimeMode,
 } from "@/lib/realtime";
 
 async function requireAdmin() {
@@ -24,21 +25,29 @@ async function clientIp(): Promise<string | null> {
   return h.get("x-real-ip");
 }
 
-export async function toggleRealtime(formData: FormData) {
+// Sets a table's realtime state from the Admin UI. `state` is one of:
+//   "off"        → disable realtime
+//   "basic"      → enable, legacy table-level broadcast (no RLS filtering)
+//   "authorized" → enable, per-subscriber RLS filtering
+export async function setRealtime(formData: FormData) {
   const session = await requireAdmin();
   const ip = await clientIp();
   const schema = String(formData.get("schema") ?? "");
   const table = String(formData.get("table") ?? "");
-  const enable = formData.get("enable") === "true";
+  const state = String(formData.get("state") ?? "");
 
   if (!SAFE_IDENT.test(schema) || !SAFE_IDENT.test(table)) {
     throw new Error("Invalid identifier");
   }
+  if (!["off", "basic", "authorized"].includes(state)) {
+    throw new Error("Invalid realtime state");
+  }
 
+  const enable = state !== "off";
   let errMsg: string | null = null;
   try {
     if (enable) {
-      await enableRealtime(schema, table);
+      await enableRealtime(schema, table, state as RealtimeMode);
     } else {
       await disableRealtime(schema, table);
     }
@@ -55,7 +64,12 @@ export async function toggleRealtime(formData: FormData) {
     success: !errMsg,
     ip,
     sessionId: session.sessionId ?? null,
-    metadata: { schema, table, ...(errMsg ? { error: errMsg } : {}) },
+    metadata: {
+      schema,
+      table,
+      ...(enable ? { mode: state } : {}),
+      ...(errMsg ? { error: errMsg } : {}),
+    },
   });
 
   // Don't silently swallow failures — re-throw so the user sees the actual
@@ -66,7 +80,7 @@ export async function toggleRealtime(formData: FormData) {
   }
 
   revalidatePath("/admin/realtime");
-  // Explicit redirect forces a full re-render so the button label flips
-  // from "ON · click to disable" → "OFF · click to enable" immediately.
+  // Explicit redirect forces a full re-render so the controls reflect the new
+  // state immediately.
   redirect("/admin/realtime");
 }

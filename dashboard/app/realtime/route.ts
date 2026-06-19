@@ -1,7 +1,8 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { realtimeHub } from "@/lib/realtime-listener";
-import { verifyAccessToken } from "@/lib/auth-jwt";
-import { isRealtimeEnabled, SAFE_IDENT } from "@/lib/realtime";
+import { verifyAccessToken, type AccessClaims } from "@/lib/auth-jwt";
+import { getRealtimeMode, SAFE_IDENT } from "@/lib/realtime";
+import { canSelectEvent } from "@/lib/realtime-rls";
 import { withCors, corsPreflight } from "@/lib/cors";
 
 // Server-Sent Events stream of row changes for a specific table.
@@ -36,15 +37,26 @@ async function handler(req: NextRequest) {
   else token = req.nextUrl.searchParams.get("token") ?? "";
 
   if (!token) return new NextResponse("missing_token", { status: 401 });
+  let claims: AccessClaims;
   try {
-    await verifyAccessToken(token);
+    // jwtVerify rejects an already-expired token here, so connect-time is covered.
+    claims = await verifyAccessToken(token);
   } catch {
     return new NextResponse("invalid_token", { status: 401 });
   }
 
-  if (!(await isRealtimeEnabled(schema, table))) {
+  const mode = await getRealtimeMode(schema, table);
+  if (!mode) {
     return new NextResponse("realtime_disabled_for_table", { status: 403 });
   }
+
+  // Authorized mode: each event is checked against the table's RLS SELECT policy
+  // in THIS subscriber's auth context before delivery. Basic mode is the legacy
+  // table-level broadcast.
+  const authorized = mode === "authorized";
+  // Token expiry (seconds since epoch). Streams can outlive the 1h token TTL, so
+  // we stop delivery the moment it lapses rather than leak under a stale token.
+  const expSeconds = typeof claims.exp === "number" ? claims.exp : 0;
 
   const channel = `realtime:${schema}:${table}`;
   const encoder = new TextEncoder();
@@ -63,13 +75,52 @@ async function handler(req: NextRequest) {
         }
       }
 
+      // Fail closed if the JWT lapses mid-stream: stop delivery, tell the client
+      // (so it can mint a fresh token and reconnect), and close. Belt-and-braces
+      // alongside the per-event exp guard in `authorize` below.
+      let expired = false;
+      let expiryTimer: ReturnType<typeof setTimeout> | null = null;
+      if (expSeconds > 0) {
+        const msLeft = expSeconds * 1000 - Date.now();
+        const fire = () => {
+          expired = true;
+          send(`event: token_expired\ndata: ${JSON.stringify({ schema, table })}\n\n`);
+          cleanup();
+        };
+        if (msLeft <= 0) {
+          // Shouldn't happen (verifyAccessToken would have 401'd), but be safe.
+          queueMicrotask(fire);
+        } else {
+          // setTimeout caps at ~24.8 days; tokens live ~1h so this is fine.
+          expiryTimer = setTimeout(fire, msLeft);
+        }
+      }
+
+      // Authorizer for authorized-mode tables: re-check the row against the
+      // table's RLS SELECT policy in this subscriber's context. Fails closed,
+      // including once the token has expired.
+      const authorize = authorized
+        ? (event: import("@/lib/realtime-rls").RealtimeEvent) => {
+            if (expired || (expSeconds > 0 && Date.now() >= expSeconds * 1000)) {
+              return false;
+            }
+            return canSelectEvent(event, claims as Record<string, unknown>);
+          }
+        : undefined;
+
       // Register with the per-replica fan-out hub instead of holding our own
       // Postgres connection. The hub keeps a single shared LISTEN connection
       // and delivers this channel's notifications to every subscriber, so a
-      // thousand open streams cost one DB connection, not a thousand.
+      // thousand open streams cost one DB connection, not a thousand. In
+      // authorized mode the hub evaluates `authorize` once per distinct user
+      // identity per event (authzKey) and reuses the decision.
       try {
-        unsubscribe = await realtimeHub().subscribe(channel, (payload) => {
-          send(`data: ${payload}\n\n`);
+        unsubscribe = await realtimeHub().subscribe(channel, {
+          deliver: (payload) => {
+            if (!expired) send(`data: ${payload}\n\n`);
+          },
+          authorize,
+          authzKey: authorized ? `${claims.sub}` : undefined,
         });
       } catch (e) {
         send(
@@ -93,6 +144,7 @@ async function handler(req: NextRequest) {
         if (closed) return;
         closed = true;
         clearInterval(hb);
+        if (expiryTimer) clearTimeout(expiryTimer);
         unsubscribe?.();
         try {
           controller.close();
