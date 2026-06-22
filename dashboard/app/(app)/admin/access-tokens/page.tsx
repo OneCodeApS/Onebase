@@ -104,6 +104,38 @@ export default async function AccessTokensPage() {
     }
   }
 }`}</pre>
+
+        <p className="mt-3 text-sm text-neutral-400">
+          Claude Desktop (<span className="font-mono">claude_desktop_config.json</span>)
+        </p>
+        <p className="mt-1 text-xs text-neutral-500">
+          Claude Desktop&apos;s config only understands stdio servers — the{" "}
+          <span className="font-mono text-neutral-400">type: &quot;http&quot;</span> form
+          above is silently skipped. Bridge the HTTP endpoint with{" "}
+          <span className="font-mono text-neutral-400">mcp-remote</span> instead (needs
+          Node.js installed). The token is passed via an env var because a space in the{" "}
+          <span className="font-mono text-neutral-400">--header</span> argument trips a
+          known bug in the bridge.
+        </p>
+        <pre className="mt-1 overflow-x-auto rounded border border-neutral-800 bg-neutral-950 px-3 py-2 font-mono text-xs text-neutral-300">{`{
+  "mcpServers": {
+    "onebase": {
+      "command": "npx",
+      "args": [
+        "-y", "mcp-remote",
+        "${mcpUrl}",
+        "--header", "Authorization:\${AUTH_HEADER}"
+      ],
+      "env": { "AUTH_HEADER": "Bearer <token>" }
+    }
+  }
+}`}</pre>
+        <p className="mt-2 text-xs text-neutral-500">
+          On Windows, if <span className="font-mono text-neutral-400">npx</span> isn&apos;t
+          found, set <span className="font-mono text-neutral-400">&quot;command&quot;: &quot;cmd&quot;</span>{" "}
+          and prepend <span className="font-mono text-neutral-400">&quot;/c&quot;, &quot;npx&quot;</span>{" "}
+          to the args. Restart Claude Desktop fully after editing.
+        </p>
       </Card>
     </main>
   );
