@@ -1,4 +1,5 @@
 import { Pool } from "pg";
+import { logRealtime } from "./realtime-log";
 
 // Dedicated connection pool for realtime's per-subscriber RLS check.
 //
@@ -82,8 +83,34 @@ export async function canSelectEvent(
         JSON.stringify(claims),
       ],
     );
-    return rows[0]?.ok === true;
-  } catch {
+    const ok = rows[0]?.ok === true;
+    if (!ok) {
+      // The check ran but the policy said no. For an authorized table that
+      // delivers nothing this is the difference between "RLS is filtering as
+      // intended" and "every event is being dropped" — record it so the logs
+      // page shows denials per subscriber. Throttled in logRealtime.
+      logRealtime({
+        schema: event.schema,
+        table: event.table,
+        level: "warn",
+        event: "authorize_deny",
+        subscriber: typeof claims.sub === "string" ? claims.sub : null,
+        detail: { op: event.type, truncated: event.truncated ?? false },
+      });
+    }
+    return ok;
+  } catch (e) {
+    // The check THREW — previously swallowed silently, which is exactly what
+    // makes authorized mode "mysteriously" deliver nothing (bad grant, missing
+    // claim, policy error). Surface the real reason on the logs page.
+    logRealtime({
+      schema: event.schema,
+      table: event.table,
+      level: "error",
+      event: "authorize_error",
+      subscriber: typeof claims.sub === "string" ? claims.sub : null,
+      detail: { op: event.type, message: (e as Error).message },
+    });
     return false;
   }
 }

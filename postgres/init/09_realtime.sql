@@ -265,3 +265,67 @@ REVOKE ALL ON FUNCTION _dashboard.enable_realtime(text, text, text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION _dashboard.disable_realtime(text, text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION _dashboard.enable_realtime(text, text, text) TO dashboard_admin;
 GRANT EXECUTE ON FUNCTION _dashboard.disable_realtime(text, text) TO dashboard_admin;
+
+-- ── Realtime diagnostics log ────────────────────────────────────────────────
+-- Mirrors postgres/migrations/0026_realtime_logs.sql. Authorized mode fails
+-- closed and silently drops events on any error; the engine records the reason
+-- here (authorize errors, per-subscriber denials, connection lifecycle) so the
+-- dashboard's realtime logs page can surface failures instead of hiding them.
+CREATE TABLE IF NOT EXISTS _dashboard.realtime_logs (
+	id          bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+	created_at  timestamptz NOT NULL DEFAULT now(),
+	schema      text NOT NULL,
+	"table"     text NOT NULL,
+	level       text NOT NULL CHECK (level IN ('info', 'warn', 'error')),
+	event       text NOT NULL,
+	subscriber  uuid,
+	detail      jsonb NOT NULL DEFAULT '{}'::jsonb
+);
+
+CREATE INDEX IF NOT EXISTS realtime_logs_created_idx
+	ON _dashboard.realtime_logs (created_at DESC);
+CREATE INDEX IF NOT EXISTS realtime_logs_table_idx
+	ON _dashboard.realtime_logs (schema, "table", created_at DESC);
+
+REVOKE ALL ON TABLE _dashboard.realtime_logs FROM PUBLIC;
+GRANT SELECT, INSERT, DELETE ON TABLE _dashboard.realtime_logs TO dashboard_admin;
+
+-- Retention splits rare 'error' rows from routine 'info'/'warn' noise so a deny
+-- storm can never evict the errors that matter. See 0026_realtime_logs.sql.
+CREATE OR REPLACE FUNCTION _dashboard.prune_realtime_logs(
+	p_error_age  interval DEFAULT interval '7 days',
+	p_noise_age  interval DEFAULT interval '24 hours',
+	p_max_rows   integer  DEFAULT 50000,
+	p_max_noise  integer  DEFAULT 20000
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog
+AS $$
+BEGIN
+	DELETE FROM _dashboard.realtime_logs
+	 WHERE level <> 'error' AND created_at < now() - p_noise_age;
+	DELETE FROM _dashboard.realtime_logs
+	 WHERE level = 'error' AND created_at < now() - p_error_age;
+
+	DELETE FROM _dashboard.realtime_logs
+	 WHERE level <> 'error'
+	   AND id < (
+	     SELECT id FROM _dashboard.realtime_logs
+	      WHERE level <> 'error'
+	      ORDER BY id DESC
+	      OFFSET p_max_noise LIMIT 1
+	   );
+
+	DELETE FROM _dashboard.realtime_logs
+	 WHERE id < (
+	   SELECT id FROM _dashboard.realtime_logs
+	    ORDER BY id DESC
+	    OFFSET p_max_rows LIMIT 1
+	 );
+END;
+$$;
+
+REVOKE ALL ON FUNCTION _dashboard.prune_realtime_logs(interval, interval, integer, integer) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION _dashboard.prune_realtime_logs(interval, interval, integer, integer) TO dashboard_admin;
