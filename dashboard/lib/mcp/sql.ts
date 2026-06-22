@@ -3,7 +3,7 @@ import { pool } from "../db";
 import { scopeAllowed, type TokenAuth } from "../access-tokens";
 
 // SQL execution for MCP tools. Each level SET ROLEs into a Postgres role whose
-// grants ARE the boundary (not statement parsing), per 0023_mcp_sql_roles.sql:
+// grants ARE the boundary (not statement parsing), per 0027_mcp_sql_roles.sql:
 //   ddl   — dashboard_admin, autocommit (db:ddl scope, admin-only tokens)
 //   write — SET LOCAL ROLE mcp_writer in a transaction: DML on the public
 //           application schema only; no DDL, and no reach into _dashboard/auth

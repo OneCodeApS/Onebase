@@ -1,4 +1,4 @@
--- 0023_mcp_sql_roles.sql
+-- 0027_mcp_sql_roles.sql
 -- Dedicated, narrowly-scoped roles for the MCP server's SQL paths, so a
 -- personal access token's db:read / db:write scope maps to a HARD Postgres
 -- boundary — not the application-layer PROTECTED_OBJECTS regex, which is

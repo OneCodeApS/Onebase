@@ -75,7 +75,7 @@ GRANT pg_write_all_data TO dashboard_sql_rw;
 -- dashboard_admin must be a member to SET ROLE to it.
 GRANT dashboard_sql_rw TO dashboard_admin;
 
--- MCP SQL roles. See postgres/migrations/0023_mcp_sql_roles.sql for the full
+-- MCP SQL roles. See postgres/migrations/0027_mcp_sql_roles.sql for the full
 -- rationale. Narrow, explicit-grant roles the MCP server SET ROLEs into for
 -- db:read / db:write tokens. Unlike dashboard_sql_rw they have NO access to
 -- _dashboard, auth, etc. — only the public application schema — so a token's
