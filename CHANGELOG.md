@@ -8,6 +8,21 @@ While the project is on `0.x`, minor version bumps (`0.1 → 0.2`) may include b
 
 ## [Unreleased]
 
+## [2.6.1] - 2026-06-22
+
+### Fixed
+
+- **Authorized-mode realtime delivered nothing — every event was silently dropped (regression present since 2.4.0).** `_dashboard.realtime_can_select` evaluates a table's RLS SELECT policy in the subscriber's context by doing `SET LOCAL ROLE authenticated` + setting `request.jwt.claims` (the same thing PostgREST does), over the hub's non-BYPASSRLS `authenticator` connection. But the function shipped as **`SECURITY DEFINER`**, and Postgres forbids changing the `role` GUC inside a security-definer function (`ERROR 42501: cannot set parameter "role" within security-definer function`). So the check threw on every call, the function's own `EXCEPTION WHEN OTHERS` swallowed it and returned `false`, and **every authorized-mode event, on every table, for every subscriber, was dropped.** Basic mode (no RLS check) was unaffected — hence "basic works, authorized = silence." The function is now **`SECURITY INVOKER`**, so it runs as the `authenticator` caller (which *is* allowed to `SET ROLE authenticated`, and is what the design always intended); `authenticator` is also granted `EXECUTE` on `_dashboard._policy_applies`, which it now evaluates as the caller. Anyone on 2.4.0–2.6.0 with a table in **authorized** mode is affected and should apply this. (The 2.5.0 realtime logs made this diagnosable: the swallowed `42501` now surfaces as an `authorize_error`.)
+
+### Changed
+
+- **Realtime logs are now capped at 24h across the board.** Previously `error` rows were kept 7 days (noise 24h); the log is a debugging aid, not an audit trail, so errors now expire after 24h too. The error/noise split and the row-count caps are retained, so a denial storm still can't evict error rows within the 24h window.
+
+### Database
+
+- **`0028_realtime_can_select_invoker.sql`** — `ALTER FUNCTION _dashboard.realtime_can_select(...) SECURITY INVOKER` and `GRANT EXECUTE ON FUNCTION _dashboard._policy_applies(oid[], text) TO authenticator`. Idempotent; mirrored into `postgres/init/09_realtime.sql` for fresh installs. On an **existing** install: apply `0028` (no dashboard redeploy needed — it's a database-only fix; authorized-mode delivery starts working immediately).
+- **`0029_realtime_logs_24h.sql`** — redefines `_dashboard.prune_realtime_logs` so its default `p_error_age` is 24h (was 7 days). Idempotent; mirrored into `postgres/init/09_realtime.sql`. On an **existing** install: apply `0029` (database-only).
+
 ## [2.6.0] - 2026-06-22
 
 ### Security
