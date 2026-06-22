@@ -147,23 +147,30 @@ All migrations in `postgres/migrations/` are wrapped in `BEGIN; … COMMIT;` and
 `IF NOT EXISTS` patterns, so it's safe to run **all** of them — already-applied migrations
 are no-ops.
 
-```bash
-# Copy every migration into the container in one shot
-docker compose -f docker-compose.yml -f docker-compose.prod.yml cp \
-  postgres/migrations postgres:/tmp/migrations
+Pipe each file straight from the host into `psql` over stdin. This iterates the host's
+`postgres/migrations/` (the files `git pull` just updated), in lexical order:
 
-# Apply them in lexical order (0001, 0002, …)
-docker compose -f docker-compose.yml -f docker-compose.prod.yml exec postgres bash -c '
-  for f in /tmp/migrations/*.sql; do
-    echo "==> $f"
-    psql -U postgres -d postgres -v ON_ERROR_STOP=1 -f "$f" || exit 1
-  done
-'
+```bash
+cd /opt/onebase
+for f in postgres/migrations/*.sql; do
+  echo "==> $f"
+  docker compose -f docker-compose.yml -f docker-compose.prod.yml exec -T postgres \
+    psql -U postgres -d postgres -v ON_ERROR_STOP=1 < "$f" \
+    || { echo "FAILED on $f"; break; }
+done
 ```
 
-If a migration errors, the whole transaction rolls back and the loop stops. Fix the cause,
-then re-run the loop — earlier successful migrations are skipped because they're
-idempotent.
+Confirm every file scrolls past — in particular the **new** ones this release adds (check
+the CHANGELOG's Database section). If a migration errors, the loop stops (`break`); fix the
+cause and re-run — earlier successful migrations are skipped because they're idempotent.
+
+> **Do NOT use `docker compose cp postgres/migrations postgres:/tmp/migrations` + a
+> container-side loop.** `docker cp` into an **existing** directory copies the source
+> *inside* it (`/tmp/migrations/migrations/…`) instead of replacing it, so a second upgrade
+> re-globs the **stale** `/tmp/migrations/*.sql` from the first run and silently skips every
+> migration the new release added — with no error. The stdin-pipe loop above reads host
+> files directly, so it can't happen. (If you must copy into the container, `rm -rf` the
+> target first or copy to a fresh path.)
 
 #### 5. Deploy the new image
 
