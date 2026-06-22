@@ -33,8 +33,9 @@ CREATE TABLE _dashboard.realtime_tables (
 GRANT ALL ON _dashboard.realtime_tables TO dashboard_admin;
 
 -- Does an RLS policy (its polroles oid[]) apply to `p_role`? Mirrors Postgres's
--- rule: PUBLIC (oid 0) or any role the target role is a member of. Called only
--- from within realtime_can_select's definer phase.
+-- rule: PUBLIC (oid 0) or any role the target role is a member of. Called from
+-- realtime_can_select, which is SECURITY INVOKER, so the `authenticator` caller
+-- needs EXECUTE on it (granted below).
 CREATE OR REPLACE FUNCTION _dashboard._policy_applies(p_roles oid[], p_role text)
 RETURNS boolean
 LANGUAGE sql STABLE
@@ -48,12 +49,19 @@ $$;
 
 -- Authorization primitive for authorized mode. Returns true iff a subscriber
 -- with JWT claims `p_claims` may SELECT the changed row, per the table's RLS
--- SELECT policies — the SAME predicate PostgREST applies. SECURITY DEFINER in
--- two phases: phase 1 (as owner) reads the catalog and builds the combined
--- policy expression; phase 2 does SET LOCAL ROLE authenticated + sets
--- request.jwt.claims and evaluates it, so RLS runs under the unprivileged
--- authenticated role. Fails CLOSED on any error, missing RLS, default-deny,
--- invalid claims, or a truncated DELETE.
+-- SELECT policies — the SAME predicate PostgREST applies. It reads the catalog
+-- and builds the combined policy expression, then does SET LOCAL ROLE
+-- authenticated + sets request.jwt.claims and evaluates it, so RLS runs under
+-- the unprivileged authenticated role exactly as a REST request would.
+--
+-- MUST be SECURITY INVOKER: it runs as its caller (the non-BYPASSRLS
+-- `authenticator` connection the hub uses), which is allowed to SET ROLE
+-- authenticated. As SECURITY DEFINER it would run as the owner, and Postgres
+-- FORBIDS changing `role` inside a security-definer function (ERROR 42501) — the
+-- EXCEPTION handler below would then swallow it and fail every check closed,
+-- delivering nothing in authorized mode. See 0028_realtime_can_select_invoker.sql.
+-- Fails CLOSED on any error, missing RLS, default-deny, invalid claims, or a
+-- truncated DELETE.
 CREATE OR REPLACE FUNCTION _dashboard.realtime_can_select(
 	p_schema  text,
 	p_table   text,
@@ -64,7 +72,7 @@ CREATE OR REPLACE FUNCTION _dashboard.realtime_can_select(
 )
 RETURNS boolean
 LANGUAGE plpgsql
-SECURITY DEFINER
+SECURITY INVOKER
 SET search_path = pg_catalog
 AS $$
 DECLARE
@@ -150,6 +158,9 @@ REVOKE ALL ON FUNCTION
 GRANT EXECUTE ON FUNCTION
 	_dashboard.realtime_can_select(text, text, jsonb, jsonb, text, jsonb)
 	TO authenticator;
+-- realtime_can_select is SECURITY INVOKER, so the authenticator caller (not the
+-- owner) evaluates _policy_applies — it needs EXECUTE on it too.
+GRANT EXECUTE ON FUNCTION _dashboard._policy_applies(oid[], text) TO authenticator;
 GRANT USAGE ON SCHEMA _dashboard TO authenticator;
 
 -- Trigger function: builds a small JSON event and emits it on a
@@ -290,10 +301,11 @@ CREATE INDEX IF NOT EXISTS realtime_logs_table_idx
 REVOKE ALL ON TABLE _dashboard.realtime_logs FROM PUBLIC;
 GRANT SELECT, INSERT, DELETE ON TABLE _dashboard.realtime_logs TO dashboard_admin;
 
--- Retention splits rare 'error' rows from routine 'info'/'warn' noise so a deny
--- storm can never evict the errors that matter. See 0026_realtime_logs.sql.
+-- Retention: the log is a 24h debugging aid, not an audit trail — everything
+-- expires after a day. The error/noise split + count caps are kept so a deny
+-- storm can't evict error rows within that window. See 0026 / 0029.
 CREATE OR REPLACE FUNCTION _dashboard.prune_realtime_logs(
-	p_error_age  interval DEFAULT interval '7 days',
+	p_error_age  interval DEFAULT interval '24 hours',
 	p_noise_age  interval DEFAULT interval '24 hours',
 	p_max_rows   integer  DEFAULT 50000,
 	p_max_noise  integer  DEFAULT 20000
