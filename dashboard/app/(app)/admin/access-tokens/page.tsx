@@ -2,12 +2,7 @@ import Link from "next/link";
 import { listTokens } from "@/lib/access-tokens";
 import { Card } from "../../_components/Card";
 import { CreateTokenForm } from "./_components/CreateTokenForm";
-import { TokenRow } from "./_components/TokenRow";
-
-function fmt(d: Date | null): string {
-  if (!d) return "—";
-  return new Date(d).toISOString().slice(0, 16).replace("T", " ");
-}
+import { TokensTable } from "./_components/TokensTable";
 
 export default async function AccessTokensPage() {
   const tokens = await listTokens();
@@ -42,42 +37,10 @@ export default async function AccessTokensPage() {
 
       <Card padded className="mt-4">
         <h2 className="text-lg font-medium">Tokens</h2>
-        {tokens.length === 0 ? (
-          <p className="mt-2 text-sm text-neutral-500">No tokens yet.</p>
-        ) : (
-          <table className="mt-3 w-full text-left text-xs">
-            <thead className="text-neutral-500">
-              <tr>
-                <th className="py-1 pr-3 font-normal">Name</th>
-                <th className="py-1 pr-3 font-normal">Owner</th>
-                <th className="py-1 pr-3 font-normal">Scopes</th>
-                <th className="py-1 pr-3 font-normal">Mode</th>
-                <th className="py-1 pr-3 font-normal">Expires</th>
-                <th className="py-1 pr-3 font-normal">Last used</th>
-                <th className="py-1 font-normal"></th>
-              </tr>
-            </thead>
-            <tbody className="text-neutral-300">
-              {tokens.map((t) => {
-                const dead = t.revoked_at !== null || new Date(t.expires_at) < new Date();
-                return (
-                  <TokenRow
-                    key={t.id}
-                    id={t.id}
-                    name={t.name}
-                    ownerEmail={t.owner_email}
-                    scopes={t.scopes}
-                    readOnly={t.read_only}
-                    expires={fmt(t.expires_at)}
-                    lastUsed={fmt(t.last_used_at)}
-                    dead={dead}
-                    revoked={t.revoked_at !== null}
-                  />
-                );
-              })}
-            </tbody>
-          </table>
-        )}
+        <p className="mt-1 text-sm text-neutral-500">
+          Revoked tokens are hidden. Filter by owner to see who created what.
+        </p>
+        <TokensTable tokens={tokens} />
       </Card>
 
       <Card padded className="mt-4">
@@ -113,28 +76,29 @@ export default async function AccessTokensPage() {
           <span className="font-mono text-neutral-400">type: &quot;http&quot;</span> form
           above is silently skipped. Bridge the HTTP endpoint with{" "}
           <span className="font-mono text-neutral-400">mcp-remote</span> instead (needs
-          Node.js installed). The token is passed via an env var because a space in the{" "}
-          <span className="font-mono text-neutral-400">--header</span> argument trips a
-          known bug in the bridge.
+          Node.js installed). On Windows, run it through{" "}
+          <span className="font-mono text-neutral-400">cmd /c</span> so the spawned process
+          resolves the <span className="font-mono text-neutral-400">npx</span> shim — a bare{" "}
+          <span className="font-mono text-neutral-400">&quot;command&quot;: &quot;npx&quot;</span>{" "}
+          often fails with ENOENT.
         </p>
         <pre className="mt-1 overflow-x-auto rounded border border-neutral-800 bg-neutral-950 px-3 py-2 font-mono text-xs text-neutral-300">{`{
   "mcpServers": {
     "onebase": {
-      "command": "npx",
+      "command": "cmd",
       "args": [
-        "-y", "mcp-remote",
+        "/c", "npx", "-y", "mcp-remote",
         "${mcpUrl}",
-        "--header", "Authorization:\${AUTH_HEADER}"
-      ],
-      "env": { "AUTH_HEADER": "Bearer <token>" }
+        "--header", "Authorization: Bearer <token>"
+      ]
     }
   }
 }`}</pre>
         <p className="mt-2 text-xs text-neutral-500">
-          On Windows, if <span className="font-mono text-neutral-400">npx</span> isn&apos;t
-          found, set <span className="font-mono text-neutral-400">&quot;command&quot;: &quot;cmd&quot;</span>{" "}
-          and prepend <span className="font-mono text-neutral-400">&quot;/c&quot;, &quot;npx&quot;</span>{" "}
-          to the args. Restart Claude Desktop fully after editing.
+          On macOS / Linux, set{" "}
+          <span className="font-mono text-neutral-400">&quot;command&quot;: &quot;npx&quot;</span>{" "}
+          and drop the <span className="font-mono text-neutral-400">&quot;/c&quot;</span> entry
+          from the args. Restart Claude Desktop fully after editing.
         </p>
       </Card>
     </main>
