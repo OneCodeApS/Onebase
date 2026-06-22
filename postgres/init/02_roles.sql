@@ -74,3 +74,32 @@ GRANT pg_read_all_data  TO dashboard_sql_rw;
 GRANT pg_write_all_data TO dashboard_sql_rw;
 -- dashboard_admin must be a member to SET ROLE to it.
 GRANT dashboard_sql_rw TO dashboard_admin;
+
+-- MCP SQL roles. See postgres/migrations/0027_mcp_sql_roles.sql for the full
+-- rationale. Narrow, explicit-grant roles the MCP server SET ROLEs into for
+-- db:read / db:write tokens. Unlike dashboard_sql_rw they have NO access to
+-- _dashboard, auth, etc. — only the public application schema — so a token's
+-- scope is a hard Postgres boundary, not just the app-layer regex. Privileges
+-- are granted DIRECTLY (not via pg_*_all_data) so they apply after SET ROLE
+-- despite NOINHERIT. BYPASSRLS matches the dashboard's see-every-row model.
+CREATE ROLE mcp_reader NOLOGIN NOINHERIT BYPASSRLS;
+CREATE ROLE mcp_writer NOLOGIN NOINHERIT BYPASSRLS;
+GRANT mcp_reader TO dashboard_admin;
+GRANT mcp_writer TO dashboard_admin;
+
+GRANT USAGE ON SCHEMA public TO mcp_reader, mcp_writer;
+-- public tables are created later in init by the bootstrap superuser, and at
+-- runtime by dashboard_admin — cover both owners via default privileges so
+-- every public table is reachable without re-granting.
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+	GRANT SELECT ON TABLES TO mcp_reader;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+	GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO mcp_writer;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+	GRANT USAGE, SELECT ON SEQUENCES TO mcp_writer;
+ALTER DEFAULT PRIVILEGES FOR ROLE dashboard_admin IN SCHEMA public
+	GRANT SELECT ON TABLES TO mcp_reader;
+ALTER DEFAULT PRIVILEGES FOR ROLE dashboard_admin IN SCHEMA public
+	GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO mcp_writer;
+ALTER DEFAULT PRIVILEGES FOR ROLE dashboard_admin IN SCHEMA public
+	GRANT USAGE, SELECT ON SEQUENCES TO mcp_writer;

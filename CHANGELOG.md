@@ -8,6 +8,24 @@ While the project is on `0.x`, minor version bumps (`0.1 → 0.2`) may include b
 
 ## [Unreleased]
 
+## [2.6.0] - 2026-06-22
+
+### Security
+
+- **MCP `db:read` / `db:write` scopes are now enforced by dedicated Postgres roles, not a string filter.** The MCP SQL paths previously ran reads as `dashboard_admin` and writes via `dashboard_sql_rw`, relying on the `PROTECTED_OBJECTS` regex to keep tokens out of credential/secret/audit tables. That regex is bypassable (a quoted identifier like `_dashboard."access_tokens"`, or `SET search_path` + an unqualified name), so a `db:read`/`db:write` token could in principle reach `auth.users`, `_dashboard.access_tokens`, or `_dashboard.function_env`. The read path now `SET ROLE`s into `mcp_reader` and the write path into `mcp_writer` — roles granted **only** on the `public` application schema, so `_dashboard`, `auth` and every other management schema are unreachable at the database layer regardless of how the SQL is written. `db:ddl` stays `dashboard_admin` (admin-scoped, trusted). The regex is retained as defense-in-depth and still guards the `db:ddl` path. Token scope selection and in-place editing are unchanged; the scopes you pick now map to a hard boundary.
+
+### Fixed
+
+- **`db:write` over MCP failed outright on PG16+.** `dashboard_sql_rw` is `NOINHERIT`, so `SET ROLE` stripped its `pg_*_all_data` privileges and every write hit `permission denied` — even on legitimate `public` tables. `mcp_writer` is granted directly (not via a predefined-role membership), so its privileges survive `SET ROLE`.
+
+### Added
+
+- **Claude Desktop connection instructions on Admin → Access tokens.** `claude_desktop_config.json` silently skips the `type: "http"` transport that Claude Code / Cursor use, so the page now documents the `mcp-remote` stdio bridge (with the env-var header form that avoids a known argument-splitting bug, and a Windows `cmd /c` note).
+
+### Database
+
+- **`0027_mcp_sql_roles.sql`** — adds `mcp_reader` (SELECT) and `mcp_writer` (SELECT/INSERT/UPDATE/DELETE) with explicit grants on `public` only, plus default privileges so future `dashboard_admin`-created tables are covered. Purely additive: no app-facing role (`anon`, `authenticated`, `authenticator`, `service_role`) is touched and nothing is `REVOKE`d, so application users are unaffected. Idempotent; mirrored into `postgres/init/02_roles.sql` for fresh installs. On an **existing** install: **apply `0027` before deploying the dashboard image** — the code `SET ROLE`s into these roles, so deploying the image first (without the roles) breaks all MCP SQL until the migration runs.
+
 ## [2.5.0] - 2026-06-22
 
 ### Added

@@ -2,11 +2,14 @@ import type { QueryResult as PgQueryResult } from "pg";
 import { pool } from "../db";
 import { scopeAllowed, type TokenAuth } from "../access-tokens";
 
-// SQL execution for MCP tools, reusing the exact role discipline the SQL
-// editor established (app/(app)/sql/actions.ts):
-//   ddl   — dashboard_admin, autocommit (db:ddl scope, admin-owned tokens)
-//   write — SET LOCAL ROLE dashboard_sql_rw in a transaction (DML, no DDL)
-//   read  — READ ONLY transaction (any write errors at the DB layer)
+// SQL execution for MCP tools. Each level SET ROLEs into a Postgres role whose
+// grants ARE the boundary (not statement parsing), per 0027_mcp_sql_roles.sql:
+//   ddl   — dashboard_admin, autocommit (db:ddl scope, admin-only tokens)
+//   write — SET LOCAL ROLE mcp_writer in a transaction: DML on the public
+//           application schema only; no DDL, and no reach into _dashboard/auth
+//   read  — READ ONLY transaction + SET LOCAL ROLE mcp_reader: SELECT on public
+//           only, so a db:read token cannot read credentials/secrets/audit even
+//           if it slips a quoted identifier past PROTECTED_OBJECTS
 
 export type SqlLevel = "read" | "write" | "ddl";
 
@@ -23,10 +26,13 @@ export function highestSqlLevel(auth: TokenAuth): SqlLevel | null {
 // Objects raw MCP SQL must never touch, regardless of scope: credentials
 // (access tokens, end-user sessions/identities, magic links), secrets
 // (encrypted function env, OAuth provider config), and the audit log (only
-// readable via get_logs, which is gated by logs:read). A string guardrail in
-// the same spirit as the SQL editor's read-only regex — the hard boundary
-// remains scopes + Postgres roles. Note `auth.uid()` and friends still pass:
-// only the listed table names match.
+// readable via get_logs, which is gated by logs:read). For db:read/db:write
+// the hard boundary is now the mcp_reader/mcp_writer grants (these schemas are
+// simply unreachable). This regex is defense-in-depth there, and remains a
+// real guard on the db:ddl path, which runs as dashboard_admin. It is a string
+// guardrail — bypassable via quoting/search_path — so it must NOT be relied on
+// alone. Note `auth.uid()` and friends still pass: only the listed table names
+// match.
 const PROTECTED_OBJECTS =
   /(_dashboard\s*\.\s*(access_tokens|function_env|audit_log)|auth\s*\.\s*(users|identities|sessions|providers|settings|magic_link_tokens))/i;
 
@@ -48,9 +54,10 @@ export async function runSqlAtLevel(
   try {
     if (level === "write") {
       await client.query("BEGIN");
-      await client.query("SET LOCAL ROLE dashboard_sql_rw");
+      await client.query("SET LOCAL ROLE mcp_writer");
     } else {
       await client.query("BEGIN READ ONLY");
+      await client.query("SET LOCAL ROLE mcp_reader");
     }
     const r = await client.query(sql);
     await client.query("COMMIT");
