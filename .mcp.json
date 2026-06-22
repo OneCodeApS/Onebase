@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "onebase": {
+      "type": "http",
+      "url": "https://api.husportalen.miltonhuse.dk/mcp/v1"
+    }
+  }
+}
