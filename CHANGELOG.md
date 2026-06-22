@@ -8,6 +8,21 @@ While the project is on `0.x`, minor version bumps (`0.1 → 0.2`) may include b
 
 ## [Unreleased]
 
+## [2.5.0] - 2026-06-22
+
+### Added
+
+- **Realtime logs — observability for the change stream (Admin → Realtime logs).** Authorized mode fails *closed*: if the per-subscriber RLS check errors, a payload won't parse, or the listener connection drops, the event is silently discarded — which made "basic works, authorized delivers nothing" impossible to diagnose. The fan-out path now records diagnostics to `_dashboard.realtime_logs` and a new admin page surfaces them with table / level / event filters and pagination. Captured events: `authorize_error` (the previously-swallowed exception, with its message), `authorize_deny` (a subscriber was filtered out by RLS), `subscribe`, `token_expired`, `realtime_disabled`, `invalid_token`, `subscribe_error`, `connection_lost`, and `payload_parse_error`. Each row carries the table, level (`info`/`warn`/`error`), the subscriber's `sub`, and a JSON detail. Successful delivery is never logged (it stays off the hot path).
+- **Table search on Admin → Realtime.** A filter box narrows the table list by `schema.table`, with a live "N of M" count, so toggling realtime stays usable as the table list grows. A **View logs** link sits alongside it.
+
+### Changed
+
+- Realtime logging is bounded so it can never fill the disk or drown the signal: identical entries are throttled per `(table, event, subscriber)` — errors at most once per 10 s, routine denials/lifecycle at most once per minute — and writes are fire-and-forget so logging can never block or break delivery. Retention (`_dashboard.prune_realtime_logs`, run opportunistically) splits rare `error` rows (kept 7 days) from routine `info`/`warn` noise (kept 24 h, capped at 20 000 rows) under a 50 000-row absolute ceiling, so a denial storm on one table can never evict the error rows that matter.
+
+### Database
+
+- **`0026_realtime_logs.sql`** — adds `_dashboard.realtime_logs` (indexed by `created_at` and by `(schema, table, created_at)`) and `_dashboard.prune_realtime_logs(error_age, noise_age, max_rows, max_noise)`. Writes come from the dashboard (`dashboard_admin`); the table is never on the successful-delivery path. Idempotent; mirrored into `postgres/init/09_realtime.sql` for fresh installs. On an **existing** install: apply `0026`, then deploy the dashboard image (the engine instrumentation ships with it) — no config or restart beyond the normal deploy.
+
 ## [2.4.0] - 2026-06-17
 
 ### Added

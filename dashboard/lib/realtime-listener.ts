@@ -1,5 +1,14 @@
 import { Client } from "pg";
 import type { RealtimeEvent } from "./realtime-rls";
+import { logRealtime } from "./realtime-log";
+
+// Channel names are "realtime:<schema>:<table>" (schema/table are SAFE_IDENT, so
+// they never contain a colon). Split back out for diagnostics logging.
+function parseChannel(channel: string): { schema: string; table: string } | null {
+  const parts = channel.split(":");
+  if (parts.length !== 3 || parts[0] !== "realtime") return null;
+  return { schema: parts[1], table: parts[2] };
+}
 
 // In-process realtime fan-out hub.
 //
@@ -63,12 +72,29 @@ class RealtimeHub {
     client.on("notification", (msg: { channel: string; payload?: string }) => {
       const subs = this.channels.get(msg.channel);
       if (!subs) return;
-      this.dispatch(subs, msg.payload ?? "");
+      this.dispatch(subs, msg.payload ?? "", msg.channel);
     });
 
     const onDown = (err?: Error) => {
       if (this.client !== client && this.connecting === null) return;
       if (err) console.error("[realtime] listener connection lost:", err.message);
+      // Record the drop against every table that currently has subscribers —
+      // events firing during the reconnect gap are missed, and this is the only
+      // signal of it. Throttled per table by logRealtime.
+      if (err) {
+        for (const channel of this.channels.keys()) {
+          const ch = parseChannel(channel);
+          if (ch) {
+            logRealtime({
+              schema: ch.schema,
+              table: ch.table,
+              level: "error",
+              event: "connection_lost",
+              detail: { message: err.message },
+            });
+          }
+        }
+      }
       this.client = null;
       this.connecting = null;
       client.removeAllListeners();
@@ -100,7 +126,7 @@ class RealtimeHub {
   // `authorize` callback; the decision is computed once per distinct `authzKey`
   // per event (many subscribers share a user identity) and reused. A failing or
   // throwing authorizer fails closed (the event is dropped for that subscriber).
-  private dispatch(subs: Set<Subscriber>, payload: string): void {
+  private dispatch(subs: Set<Subscriber>, payload: string, channel: string): void {
     let event: RealtimeEvent | null = null;
     let parsed = false;
     // Per-event memo of authorization decisions, keyed by authzKey.
@@ -122,6 +148,18 @@ class RealtimeHub {
           event = JSON.parse(payload) as RealtimeEvent;
         } catch {
           event = null;
+          // A notify payload that won't parse means EVERY authorized subscriber
+          // on this table is silently dropped — surface it once per table.
+          const ch = parseChannel(channel);
+          if (ch) {
+            logRealtime({
+              schema: ch.schema,
+              table: ch.table,
+              level: "error",
+              event: "payload_parse_error",
+              detail: { bytes: payload.length },
+            });
+          }
         }
       }
       // Unparseable payload → fail closed for every authorized subscriber.

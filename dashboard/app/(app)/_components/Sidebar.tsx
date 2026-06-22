@@ -46,6 +46,7 @@ const GROUPS: NavGroup[] = [
           { href: "/admin/db-functions", label: "DB functions", match: "/admin/db-functions" },
           { href: "/admin/grants", label: "Grants", match: "/admin/grants" },
           { href: "/admin/realtime", label: "Realtime", match: "/admin/realtime", adminOnly: true },
+          { href: "/admin/realtime/logs", label: "Realtime logs", match: "/admin/realtime/logs", adminOnly: true },
           { href: "/admin/enums", label: "Enums", match: "/admin/enums" },
         ],
       },

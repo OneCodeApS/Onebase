@@ -3,6 +3,7 @@ import { realtimeHub } from "@/lib/realtime-listener";
 import { verifyAccessToken, type AccessClaims } from "@/lib/auth-jwt";
 import { getRealtimeMode, SAFE_IDENT } from "@/lib/realtime";
 import { canSelectEvent } from "@/lib/realtime-rls";
+import { logRealtime } from "@/lib/realtime-log";
 import { withCors, corsPreflight } from "@/lib/cors";
 
 // Server-Sent Events stream of row changes for a specific table.
@@ -41,12 +42,26 @@ async function handler(req: NextRequest) {
   try {
     // jwtVerify rejects an already-expired token here, so connect-time is covered.
     claims = await verifyAccessToken(token);
-  } catch {
+  } catch (e) {
+    logRealtime({
+      schema,
+      table,
+      level: "warn",
+      event: "invalid_token",
+      detail: { message: (e as Error).message },
+    });
     return new NextResponse("invalid_token", { status: 401 });
   }
 
   const mode = await getRealtimeMode(schema, table);
   if (!mode) {
+    logRealtime({
+      schema,
+      table,
+      level: "warn",
+      event: "realtime_disabled",
+      subscriber: typeof claims.sub === "string" ? claims.sub : null,
+    });
     return new NextResponse("realtime_disabled_for_table", { status: 403 });
   }
 
@@ -84,6 +99,13 @@ async function handler(req: NextRequest) {
         const msLeft = expSeconds * 1000 - Date.now();
         const fire = () => {
           expired = true;
+          logRealtime({
+            schema,
+            table,
+            level: "info",
+            event: "token_expired",
+            subscriber: typeof claims.sub === "string" ? claims.sub : null,
+          });
           send(`event: token_expired\ndata: ${JSON.stringify({ schema, table })}\n\n`);
           cleanup();
         };
@@ -123,6 +145,14 @@ async function handler(req: NextRequest) {
           authzKey: authorized ? `${claims.sub}` : undefined,
         });
       } catch (e) {
+        logRealtime({
+          schema,
+          table,
+          level: "error",
+          event: "subscribe_error",
+          subscriber: typeof claims.sub === "string" ? claims.sub : null,
+          detail: { mode, message: (e as Error).message },
+        });
         send(
           `event: error\ndata: ${JSON.stringify({
             error: (e as Error).message,
@@ -133,6 +163,15 @@ async function handler(req: NextRequest) {
         } catch {}
         return;
       }
+
+      logRealtime({
+        schema,
+        table,
+        level: "info",
+        event: "subscribe",
+        subscriber: typeof claims.sub === "string" ? claims.sub : null,
+        detail: { mode },
+      });
 
       // Initial event so the client knows we're up.
       send(`event: open\ndata: ${JSON.stringify({ schema, table })}\n\n`);
