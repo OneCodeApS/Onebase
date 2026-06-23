@@ -8,6 +8,17 @@ While the project is on `0.x`, minor version bumps (`0.1 → 0.2`) may include b
 
 ## [Unreleased]
 
+## [2.7.0] - 2026-06-22
+
+### Added
+
+- **Owner filter on Admin → Access tokens.** A dropdown (shown only when more than one owner holds tokens) narrows the token table to a single owner's tokens, with per-owner counts in each option, so it stays clear who created what as the list grows. Filtering is client-side over the already-loaded list — nothing is refetched.
+
+### Changed
+
+- **Revoked tokens are now hidden from the Access tokens list.** `listTokens` filters `revoked_at IS NULL`, so revoked tokens no longer clutter the table. The row is kept in the database (revoke stays a soft-delete) and the revocation is recorded in the audit log, so nothing is lost — it just drops out of the live view.
+- **The Claude Desktop connection snippet now uses the direct `cmd /c npx … --header "Authorization: Bearer <token>"` form**, replacing the `${AUTH_HEADER}` env-var indirection introduced in 2.6.0. A bare `"command": "npx"` frequently fails with `ENOENT` on Windows because the spawned process can't resolve the `npx` shim; running it through `cmd /c` resolves the shim, and passing the header as a single inline argv entry sidesteps the argument-splitting concern the env-var form was working around. The note now documents the macOS/Linux variant (`"command": "npx"`, drop `"/c"`). Docs-only — no behavioral change to the MCP server.
+
 ## [2.6.1] - 2026-06-22
 
 ### Fixed

@@ -199,6 +199,10 @@ export function touchLastUsed(tokenId: string): void {
     .catch(() => {});
 }
 
+// Lists tokens for the admin page. Revoked tokens are hidden here to keep the
+// table uncluttered — the row is kept in the DB (revoke stays a soft-delete,
+// see revokeToken), and the revocation itself is recorded in the audit log, so
+// nothing is lost; it just no longer shows up in the live list.
 export async function listTokens(): Promise<AccessTokenRow[]> {
   const { rows } = await pool().query<AccessTokenRow>(
     `SELECT t.id, t.name, t.user_id, t.scopes, t.read_only,
@@ -206,6 +210,7 @@ export async function listTokens(): Promise<AccessTokenRow[]> {
             u.email AS owner_email
        FROM _dashboard.access_tokens t
        JOIN _dashboard.users u ON u.id = t.user_id
+      WHERE t.revoked_at IS NULL
       ORDER BY t.created_at DESC`,
   );
   return rows;
