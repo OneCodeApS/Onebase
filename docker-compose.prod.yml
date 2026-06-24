@@ -24,9 +24,15 @@ services:
       replicas: 2
 
   postgres:
-    # Don't expose Postgres on the host network in prod. Use docker exec
-    # or an SSH tunnel to reach the DB from your laptop.
-    ports: !override []
+    # Bound to the server's loopback only — NOT the public network. This is the
+    # SSH-tunnel target: nothing off-box can reach 5432, but a developer or BI
+    # tool (Power BI) can `ssh -L 5432:localhost:5432 <user>@<server>` and then
+    # connect to localhost as if the DB were local. The `bi_readonly` role
+    # (migration 0030) is the intended login for that path. To lock the DB down
+    # completely instead, set `ports: !override []` and use `docker exec`.
+    # See docs/OPERATIONS.md → "Connecting a BI tool / SQL client over SSH".
+    ports: !override
+      - "127.0.0.1:5432:5432"
 
   minio:
     # Same story as Postgres — the local-dev loopback mapping has no place

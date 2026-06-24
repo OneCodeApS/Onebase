@@ -8,6 +8,8 @@
 
 \getenv authenticator_pw AUTHENTICATOR_PASSWORD
 \getenv dashboard_admin_pw DASHBOARD_ADMIN_PASSWORD
+\set bi_readonly_pw ''
+\getenv bi_readonly_pw BI_READONLY_PASSWORD
 
 -- anon: unauthenticated PostgREST traffic. NOLOGIN so it cannot connect directly.
 CREATE ROLE anon NOLOGIN NOINHERIT;
@@ -103,3 +105,36 @@ ALTER DEFAULT PRIVILEGES FOR ROLE dashboard_admin IN SCHEMA public
 	GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO mcp_writer;
 ALTER DEFAULT PRIVILEGES FOR ROLE dashboard_admin IN SCHEMA public
 	GRANT USAGE, SELECT ON SEQUENCES TO mcp_writer;
+
+-- bi_readonly: a read-only LOGIN role for external SQL clients / BI tools
+-- (Power BI, Excel, DBeaver) that connect to the database directly over an SSH
+-- tunnel. The DB port is never public (prod publishes 127.0.0.1 only), so the
+-- tunnel is the access path. SELECT on `public` ONLY — never granted USAGE on
+-- _dashboard / auth / etc., so credentials, secrets and the audit log are
+-- unreachable. BYPASSRLS so reporting sees every row (RLS constrains the public
+-- PostgREST clients, not this admin-issued reporting login; ALTER to
+-- NOBYPASSRLS if you want RLS applied). Created NOLOGIN and only flipped to
+-- LOGIN when BI_READONLY_PASSWORD is set, so it can never accept an empty
+-- password. The matching migration is postgres/migrations/0030_bi_readonly_role.sql.
+CREATE ROLE bi_readonly NOLOGIN BYPASSRLS;
+GRANT USAGE ON SCHEMA public TO bi_readonly;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+	GRANT SELECT ON TABLES TO bi_readonly;
+ALTER DEFAULT PRIVILEGES FOR ROLE dashboard_admin IN SCHEMA public
+	GRANT SELECT ON TABLES TO bi_readonly;
+
+-- Seed the password only while the role has none (always true here on a fresh
+-- init). Kept symmetric with migration 0030, which uses the same guard so a
+-- rotated password is never reverted on re-run.
+SELECT
+	(:'bi_readonly_pw' <> '') AS bi_readonly_has_pw,
+	NOT EXISTS (
+		SELECT 1 FROM pg_authid
+		WHERE rolname = 'bi_readonly' AND rolpassword IS NOT NULL
+	) AS bi_readonly_needs_pw
+\gset
+\if :bi_readonly_has_pw
+	\if :bi_readonly_needs_pw
+		ALTER ROLE bi_readonly LOGIN PASSWORD :'bi_readonly_pw';
+	\endif
+\endif

@@ -18,6 +18,7 @@ by Onebase upgrades — none of the steps below touch it.
 - [Upgrading PostgreSQL (major version)](#upgrading-postgresql-major-version)
 - [Rolling back to a previous version](#rolling-back-to-a-previous-version)
 - [Running multiple dashboard replicas (HA)](#running-multiple-dashboard-replicas-ha)
+- [Connecting a BI tool / SQL client over SSH](#connecting-a-bi-tool--sql-client-over-ssh)
 - [Troubleshooting](#troubleshooting)
 - [Notes](#notes)
 
@@ -502,6 +503,98 @@ Expect **exactly one** `[scheduler] acquired leadership` line; the other replica
 `[leader] another replica holds the scheduler lock — standing by`. Cron edits made through
 any replica reach the leader over `NOTIFY cron_reload`, so they still take effect
 immediately.
+
+---
+
+## Connecting a BI tool / SQL client over SSH
+
+For Power BI, Excel, DBeaver, `psql`, or any other tool that speaks the PostgreSQL
+wire protocol. The database port is **never exposed to the public network** — in prod
+it's published on the server's loopback only (`docker-compose.prod.yml` →
+`127.0.0.1:5432:5432`), so the only way in from your laptop is an SSH tunnel. SSH is an
+encrypted, key-authenticated channel you already trust into the box; the tunnel maps a
+local port on your machine to the database port as seen from the server, so the tool
+connects to `localhost` while the bytes ride the existing SSH session. No new inbound
+port is opened, traffic is encrypted even though the Postgres listener has no TLS of its
+own, and access is gated by two layers (your SSH key, then the database password).
+
+The intended login is the read-only **`bi_readonly`** role: `SELECT` on the `public`
+schema only — `_dashboard`, `auth`, and every other management schema are unreachable, so
+credentials, secrets, and the audit log can't be read through it. (Admins can surface the
+exact values for an install from the dashboard's **Connect** dialog → *Direct database
+connection*.)
+
+### 1. Enable the role (once)
+
+1. Set a password in `.env` on the backend box:
+   ```bash
+   echo "BI_READONLY_PASSWORD=$(openssl rand -base64 24)" >> .env
+   ```
+2. Recreate the postgres container so it picks up the new env var, then apply the
+   migration that flips the role to `LOGIN`:
+   ```bash
+   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d postgres
+   docker compose -f docker-compose.yml -f docker-compose.prod.yml cp \
+     postgres/migrations postgres:/tmp/migrations
+   docker compose -f docker-compose.yml -f docker-compose.prod.yml exec postgres bash -c \
+     'psql -U postgres -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 -f /tmp/migrations/0030_bi_readonly_role.sql'
+   ```
+   On a **fresh** install with `BI_READONLY_PASSWORD` already in `.env`, the init scripts
+   create and enable the role automatically — skip this step.
+
+### 2. Open the tunnel (on your laptop)
+
+```bash
+ssh -L 5432:localhost:5432 <DEPLOY_USER>@<BACKEND_IP>
+```
+
+Keep it running. If port `5432` is already in use locally (e.g. a local Postgres), map a
+different local port: `-L 15432:localhost:5432` and use `15432` below.
+
+### 3. Point the client at the local end
+
+| Setting  | Value |
+| -------- | ----- |
+| Host     | `localhost` |
+| Port     | `5432` (or your chosen local port) |
+| Database | your `POSTGRES_DB` (default `postgres`) |
+| User     | `bi_readonly` |
+| Password | the `BI_READONLY_PASSWORD` you set |
+| SSL      | disable — the SSH tunnel already encrypts the traffic |
+
+In **Power BI**: *Get Data → PostgreSQL database*, Server `localhost:5432`, Database
+`postgres`.
+
+> `bi_readonly` is `BYPASSRLS` so reports see every row (RLS constrains the public
+> PostgREST API clients, not this trusted reporting login). If you'd rather RLS apply to
+> BI queries, `ALTER ROLE bi_readonly NOBYPASSRLS;`.
+
+### Rotating the password (e.g. after a leak)
+
+The live password lives in Postgres, not in `.env` (the env var is only the first-time
+seed — migration `0030` applies it only while the role has no password, so re-running
+migrations on an upgrade never reverts it).
+
+**From the dashboard (easiest):** an admin can rotate it under **Admin → Settings → Direct
+database access** — click *Rotate password* and the new value is generated and shown once
+(it also sets the password the first time, so you can skip the `.env` + migration step for
+enabling). This is audited as `settings.bi_readonly_password.rotate` and needs migration
+`0031` (the `_dashboard.rotate_bi_readonly_password` helper, mirrored into the init scripts).
+
+**From the CLI:** rotation is a single statement, effective immediately, with no restart:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.prod.yml exec postgres \
+  psql -U postgres -d "$POSTGRES_DB" -c \
+  "ALTER ROLE bi_readonly PASSWORD '<new-strong-password>';"
+```
+
+Existing tunnelled sessions keep their current connection until they reconnect; hand the
+new password to whoever needs it and they reconnect. You can leave `.env` as-is, or
+update `BI_READONLY_PASSWORD` to match if you like to keep it as a documented record —
+either way it won't be re-applied over a rotated password. To force *all* access to stop
+immediately, disable the role instead: `ALTER ROLE bi_readonly NOLOGIN;` (re-enable later
+with `LOGIN`).
 
 ---
 

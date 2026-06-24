@@ -8,6 +8,23 @@ While the project is on `0.x`, minor version bumps (`0.1 → 0.2`) may include b
 
 ## [Unreleased]
 
+## [2.8.0] - 2026-06-24
+
+### Added
+
+- **Direct database connection for BI tools / SQL clients (Power BI) over SSH.** The DB speaks the plain PostgreSQL wire protocol, but the port is never exposed publicly — so a new read-only **`bi_readonly`** login role + an SSH-tunnel workflow give Power BI, Excel, DBeaver, or `psql` safe access. `bi_readonly` has `SELECT` on the `public` schema **only** (never granted `USAGE` on `_dashboard` / `auth` / any management schema, so credentials, secrets, and the audit log are unreachable), and is `BYPASSRLS` so reporting sees every row (RLS still constrains the public PostgREST clients; `ALTER ROLE bi_readonly NOBYPASSRLS;` to opt out). The role is created disabled (`NOLOGIN`) and only flips to `LOGIN` once `BI_READONLY_PASSWORD` is configured, so it can never accept an empty password. New section in **docs/OPERATIONS.md** documents the one-time enable plus the `ssh -L 5432:localhost:5432 …` + client-setup steps.
+- **Connect dialog → Direct database connection (admin-only).** The dashboard's **Connect** modal gains an admin-gated section with the install's real values pre-filled: the `ssh -L` command (host derived from `API_PUBLIC_URL`), the `localhost` connection parameters (port, database, `bi_readonly` user, "disable SSL — the tunnel encrypts" note), a Power BI hint, and copy buttons for the command and connection string. It renders only when the signed-in operator's role is `admin` — non-admins never see this privileged access path. The existing API URL / anon-key section is unchanged and stays visible to everyone.
+- **Rotate the `bi_readonly` password from the dashboard (Admin → Settings → Direct database access).** A *Rotate password* button generates a strong (≈192-bit, connection-string-safe) password, sets it via a `SECURITY DEFINER` helper (`dashboard_admin` can't `ALTER ROLE` directly — same pattern as the API row-cap setting), and shows it **once**. It takes effect immediately with no restart, also serves as the in-UI way to set the password the first time (no `.env` edit needed), and is audited as `settings.bi_readonly_password.rotate`. The password is never written to the URL, the audit log, or the query text (bound parameter).
+
+### Changed
+
+- **Production Postgres is now published on the server's loopback (`127.0.0.1:5432:5432`)** instead of being fully unpublished (`docker-compose.prod.yml`). This is the SSH-tunnel target: still unreachable from off-box (loopback only), but `ssh -L` can now forward to it. To lock the DB down completely instead, set `ports: !override []` and use `docker exec`.
+
+### Database
+
+- **`0031_bi_readonly_rotate_fn.sql`** — `_dashboard.rotate_bi_readonly_password(text)`, the `SECURITY DEFINER` helper backing the dashboard's *Rotate password* button (validates length ≥ 16, requires the role to exist, `ALTER ROLE … LOGIN PASSWORD %L`). `EXECUTE` granted to `dashboard_admin` only. Idempotent; mirrored into `postgres/init/17_bi_readonly.sql` for fresh installs. On an **existing** install, apply it after `0030` to enable in-UI rotation.
+- **`0030_bi_readonly_role.sql`** — creates the `bi_readonly` role with `SELECT` on `public` (existing + default privileges for both the bootstrap superuser and `dashboard_admin`-created tables), and seeds `LOGIN`/password from `BI_READONLY_PASSWORD`. The password is a **one-time seed**: it is applied only while the role has no password, so re-running the migration (every upgrade re-runs all migrations) can never revert a rotated password. **Rotate** with a single instant, no-restart statement — `ALTER ROLE bi_readonly PASSWORD '<new>';` (after a leak; `.env` is not re-asserted over it). Purely additive — no existing role is touched and nothing is `REVOKE`d. Idempotent; mirrored into `postgres/init/02_roles.sql` for fresh installs. On an **existing** install (only needed to use the feature): add `BI_READONLY_PASSWORD` to `.env`, recreate `postgres` so it sees the var (`docker compose … up -d postgres`), then apply `0030`.
+
 ## [2.7.0] - 2026-06-22
 
 ### Added
