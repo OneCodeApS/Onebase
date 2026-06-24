@@ -97,7 +97,7 @@ export default async function Home() {
           </h2>
           <p className="mt-1 text-xs text-neutral-500">
             How much each subsystem is currently consuming. Pruning audit rows
-            (Audit settings) shrinks the database; deleting objects shrinks storage.
+            (Settings → Logs) shrinks the database; deleting objects shrinks storage.
           </p>
           <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
             <StatCard

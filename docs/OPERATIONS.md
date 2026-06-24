@@ -575,8 +575,8 @@ The live password lives in Postgres, not in `.env` (the env var is only the firs
 seed — migration `0030` applies it only while the role has no password, so re-running
 migrations on an upgrade never reverts it).
 
-**From the dashboard (easiest):** an admin can rotate it under **Admin → Settings → Direct
-database access** — click *Rotate password* and the new value is generated and shown once
+**From the dashboard (easiest):** an admin can rotate it under **Admin → Settings → Database**
+— click *Rotate password* and the new value is generated and shown once
 (it also sets the password the first time, so you can skip the `.env` + migration step for
 enabling). This is audited as `settings.bi_readonly_password.rotate` and needs migration
 `0031` (the `_dashboard.rotate_bi_readonly_password` helper, mirrored into the init scripts).

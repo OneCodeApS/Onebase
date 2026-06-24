@@ -72,6 +72,8 @@ export function ConnectModal({
   const dialogRef = useRef<HTMLDialogElement | null>(null);
   const backdrop = useBackdropDismiss(dialogRef);
   const [fwId, setFwId] = useState(FRAMEWORKS[0].id);
+  // Top-level tabs. The "db" tab only exists for admins (directDb present).
+  const [tab, setTab] = useState<"app" | "db">("app");
 
   const fw = FRAMEWORKS.find((f) => f.id === fwId) ?? FRAMEWORKS[0];
   const urlVar = `${fw.prefix}ONEBASE_URL`;
@@ -125,8 +127,7 @@ const rows = await res.json();`;
           <div>
             <div className="text-lg font-semibold">Connect to your project</div>
             <p className="mt-0.5 text-xs text-neutral-500">
-              Drop these into your app&apos;s environment file and you&apos;re
-              wired up to this project&apos;s API.
+              Wire up a client app, or connect a SQL / BI tool to the database.
             </p>
           </div>
           <button
@@ -139,7 +140,34 @@ const rows = await res.json();`;
           </button>
         </div>
 
-        <div className="space-y-5 px-5 py-4">
+        {/* Tabs — the Direct database tab is admin-only (directDb present). */}
+        {directDb && (
+          <div className="flex gap-4 border-b border-neutral-800 px-5">
+            {(
+              [
+                { id: "app", label: "Application" },
+                { id: "db", label: "Direct database" },
+              ] as const
+            ).map((t) => (
+              <button
+                key={t.id}
+                type="button"
+                onClick={() => setTab(t.id)}
+                className={`-mb-px border-b-2 px-1 py-2 text-sm ${
+                  tab === t.id
+                    ? "border-emerald-500 text-neutral-100"
+                    : "border-transparent text-neutral-400 hover:text-neutral-100"
+                }`}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+        )}
+
+        <div
+          className={`space-y-5 px-5 py-4 ${tab === "app" ? "" : "hidden"}`}
+        >
           {/* Framework picker — only changes the env-var prefix. */}
           <div className="flex flex-wrap gap-1">
             {FRAMEWORKS.map((f) => (
@@ -204,101 +232,92 @@ const rows = await res.json();`;
               </p>
             </div>
           </div>
+        </div>
 
-          {/* Direct database connection — admin-only. Describes a privileged
-              access path (a read-only DB login over an SSH tunnel), so it is
-              gated to admins by the Header that renders this modal. */}
-          {directDb && (
-            <div className="rounded border border-amber-800/40 bg-amber-950/10 p-3">
-              <div className="flex items-center gap-2">
-                <h3 className="text-sm font-medium text-neutral-200">
-                  Direct database connection
-                </h3>
-                <span className="rounded bg-amber-900/40 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-300">
-                  Admin
-                </span>
+        {/* Direct database tab — admin-only. Describes a privileged access path
+            (a read-only DB login over an SSH tunnel), so it is gated to admins
+            by the Header that renders this modal. */}
+        {directDb && (
+          <div
+            className={`space-y-4 px-5 py-4 ${tab === "db" ? "" : "hidden"}`}
+          >
+            <p className="text-xs text-neutral-400">
+              <span className="font-medium text-neutral-300">Admin only.</span>{" "}
+              For Power BI, Excel, or any SQL client. The database is{" "}
+              <span className="text-neutral-300">not exposed publicly</span> —
+              you reach it over an SSH tunnel using the read-only{" "}
+              <span className="font-mono text-neutral-300">{directDb.user}</span>{" "}
+              role. Set or rotate its password in{" "}
+              <a
+                href="/admin/settings/database"
+                className="text-neutral-300 underline hover:text-neutral-100"
+              >
+                Settings → Database
+              </a>{" "}
+              (the role must exist first — migration{" "}
+              <span className="font-mono text-neutral-300">0030</span>).
+            </p>
+
+            {/* Step 1 — open the tunnel. */}
+            <div>
+              <div className="text-xs font-medium text-neutral-300">
+                1. Open the tunnel (keep it running)
               </div>
-              <p className="mt-1 text-xs text-neutral-400">
-                For Power BI, Excel, or any SQL client. The database is{" "}
-                <span className="text-neutral-300">not exposed publicly</span> —
-                you reach it over an SSH tunnel using the read-only{" "}
-                <span className="font-mono text-neutral-300">
-                  {directDb.user}
-                </span>{" "}
-                role. Set or rotate its password in{" "}
-                <a
-                  href="/admin/settings"
-                  className="text-neutral-300 underline hover:text-neutral-100"
-                >
-                  Settings
-                </a>{" "}
-                (the role must exist first — migration{" "}
-                <span className="font-mono text-neutral-300">0030</span>).
+              <div className="mt-1 overflow-x-auto rounded border border-neutral-800 bg-neutral-950 px-3 py-2 font-mono text-xs text-neutral-300">
+                {sshCmd}
+              </div>
+              <p className="mt-1 text-[11px] text-neutral-500">
+                Replace <span className="font-mono">&lt;user&gt;</span> with your
+                SSH user; adjust the host if your SSH host differs from{" "}
+                <span className="font-mono">{directDb.host}</span>. Any free
+                local port works — change the left‑hand{" "}
+                <span className="font-mono">{LOCAL_TUNNEL_PORT}</span> if it&apos;s
+                taken.
               </p>
-
-              {/* Step 1 — open the tunnel. */}
-              <div className="mt-3">
-                <div className="text-xs font-medium text-neutral-300">
-                  1. Open the tunnel (keep it running)
-                </div>
-                <div className="mt-1 overflow-x-auto rounded border border-neutral-800 bg-neutral-950 px-3 py-2 font-mono text-xs text-neutral-300">
-                  {sshCmd}
-                </div>
-                <p className="mt-1 text-[11px] text-neutral-500">
-                  Replace <span className="font-mono">&lt;user&gt;</span> with
-                  your SSH user; adjust the host if your SSH host differs from{" "}
-                  <span className="font-mono">{directDb.host}</span>. Any free
-                  local port works — change the left‑hand{" "}
-                  <span className="font-mono">{LOCAL_TUNNEL_PORT}</span> if it&apos;s
-                  taken.
-                </p>
-                <div className="mt-2">
-                  <CopyButton value={sshCmd} label="Copy command" />
-                </div>
-              </div>
-
-              {/* Step 2 — connection parameters. */}
-              <div className="mt-3">
-                <div className="text-xs font-medium text-neutral-300">
-                  2. Connect your client to the local end of the tunnel
-                </div>
-                <dl className="mt-1 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 rounded border border-neutral-800 bg-neutral-950 px-3 py-2 font-mono text-xs">
-                  <dt className="text-neutral-500">Host</dt>
-                  <dd className="text-neutral-200">localhost</dd>
-                  <dt className="text-neutral-500">Port</dt>
-                  <dd className="text-neutral-200">{LOCAL_TUNNEL_PORT}</dd>
-                  <dt className="text-neutral-500">Database</dt>
-                  <dd className="text-neutral-200">{directDb.database}</dd>
-                  <dt className="text-neutral-500">User</dt>
-                  <dd className="text-neutral-200">{directDb.user}</dd>
-                  <dt className="text-neutral-500">Password</dt>
-                  <dd className="text-neutral-200">
-                    your BI_READONLY_PASSWORD
-                  </dd>
-                  <dt className="text-neutral-500">SSL</dt>
-                  <dd className="text-neutral-200">
-                    disable (the SSH tunnel encrypts the traffic)
-                  </dd>
-                </dl>
-                <p className="mt-1 text-[11px] text-neutral-500">
-                  Power BI: <span className="text-neutral-400">Get Data →
-                  PostgreSQL database</span>, Server{" "}
-                  <span className="font-mono text-neutral-400">
-                    localhost:{LOCAL_TUNNEL_PORT}
-                  </span>
-                  , Database{" "}
-                  <span className="font-mono text-neutral-400">
-                    {directDb.database}
-                  </span>
-                  .
-                </p>
-                <div className="mt-2">
-                  <CopyButton value={connStr} label="Copy connection string" />
-                </div>
+              <div className="mt-2">
+                <CopyButton value={sshCmd} label="Copy command" />
               </div>
             </div>
-          )}
-        </div>
+
+            {/* Step 2 — connection parameters. */}
+            <div>
+              <div className="text-xs font-medium text-neutral-300">
+                2. Connect your client to the local end of the tunnel
+              </div>
+              <dl className="mt-1 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 rounded border border-neutral-800 bg-neutral-950 px-3 py-2 font-mono text-xs">
+                <dt className="text-neutral-500">Host</dt>
+                <dd className="text-neutral-200">localhost</dd>
+                <dt className="text-neutral-500">Port</dt>
+                <dd className="text-neutral-200">{LOCAL_TUNNEL_PORT}</dd>
+                <dt className="text-neutral-500">Database</dt>
+                <dd className="text-neutral-200">{directDb.database}</dd>
+                <dt className="text-neutral-500">User</dt>
+                <dd className="text-neutral-200">{directDb.user}</dd>
+                <dt className="text-neutral-500">Password</dt>
+                <dd className="text-neutral-200">your BI_READONLY_PASSWORD</dd>
+                <dt className="text-neutral-500">SSL</dt>
+                <dd className="text-neutral-200">
+                  disable (the SSH tunnel encrypts the traffic)
+                </dd>
+              </dl>
+              <p className="mt-1 text-[11px] text-neutral-500">
+                Power BI: <span className="text-neutral-400">Get Data →
+                PostgreSQL database</span>, Server{" "}
+                <span className="font-mono text-neutral-400">
+                  localhost:{LOCAL_TUNNEL_PORT}
+                </span>
+                , Database{" "}
+                <span className="font-mono text-neutral-400">
+                  {directDb.database}
+                </span>
+                .
+              </p>
+              <div className="mt-2">
+                <CopyButton value={connStr} label="Copy connection string" />
+              </div>
+            </div>
+          </div>
+        )}
       </dialog>
     </>
   );
