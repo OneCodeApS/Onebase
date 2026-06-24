@@ -168,6 +168,53 @@ export async function rotateBiReadonlyPassword(): Promise<
   return { ok: true, password };
 }
 
+// Rotate the read-only `bi_readonly` database login (Power BI / SQL clients).
+// Unlike the other actions here this RETURNS a value rather than redirecting,
+// because the freshly generated password must be shown to the admin exactly
+// once — it is never persisted in cleartext anywhere we can read back, and is
+// deliberately kept out of the URL, the audit log, and the query text.
+export async function rotateBiReadonlyPassword(): Promise<
+  { ok: true; password: string } | { ok: false; error: string }
+> {
+  const session = await getSession();
+  if (session.role !== "admin") return { ok: false, error: "Forbidden." };
+
+  // base64url → only A–Z a–z 0–9 - _, so it's safe to paste into a Postgres
+  // connection string (no /, +, @, : to confuse URL parsing). 24 bytes ≈ 32
+  // chars ≈ 192 bits of entropy.
+  const password = randomBytes(24).toString("base64url");
+
+  try {
+    // SECURITY DEFINER helper — dashboard_admin can't ALTER ROLE directly. The
+    // password is a bound parameter, so it never lands in the query text.
+    await pool().query("SELECT _dashboard.rotate_bi_readonly_password($1)", [
+      password,
+    ]);
+  } catch (e) {
+    const raw = e instanceof Error ? e.message : String(e);
+    // Surface the helper's friendly "apply migration 0030 first" hint as-is;
+    // anything else is reported generically.
+    const error = raw.includes("bi_readonly")
+      ? raw
+      : "Could not rotate the password. Is migration 0030/0031 applied?";
+    return { ok: false, error };
+  }
+
+  await audit({
+    actor: session.email!,
+    actorId: session.userId!,
+    role: "admin",
+    action: "settings.bi_readonly_password.rotate",
+    target: "bi_readonly",
+    ip: await clientIp(),
+    sessionId: session.sessionId ?? null,
+    // The password itself is never recorded.
+    metadata: {},
+  });
+
+  return { ok: true, password };
+}
+
 export async function runAuditPruneNow() {
   const session = await getSession();
   if (session.role !== "admin") redirect("/");
