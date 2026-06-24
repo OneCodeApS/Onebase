@@ -76,10 +76,10 @@ const GROUPS: NavGroup[] = [
     ],
   },
   {
-    heading: "Settings",
+    heading: "Administration",
     items: [
       { href: "/admin/audit", label: "Audit log", match: "/admin/audit", adminOnly: true },
-      { href: "/admin/settings", label: "Audit settings", match: "/admin/settings", adminOnly: true },
+      { href: "/admin/settings", label: "Settings", match: "/admin/settings", adminOnly: true },
       { href: "/admin/system", label: "Versions", match: "/admin/system", adminOnly: true },
     ],
   },

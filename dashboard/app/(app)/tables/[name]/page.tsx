@@ -283,7 +283,7 @@ const ADMIN_PAGE: Record<string, { href: string; label: string }> = {
   "_dashboard.functions": { href: "/admin/functions", label: "Edge functions" },
   "_dashboard.function_env": { href: "/admin/functions/env", label: "Function env vars" },
   "_dashboard.cron_jobs": { href: "/admin/cron", label: "Cron jobs" },
-  "_dashboard.settings": { href: "/admin/settings", label: "Audit settings" },
+  "_dashboard.settings": { href: "/admin/settings", label: "Settings" },
   "_dashboard.bucket_policies": { href: "/storage", label: "Storage buckets" },
   "auth.users": { href: "/admin/end-users", label: "End users" },
   "auth.providers": { href: "/admin/auth-providers", label: "Auth providers" },

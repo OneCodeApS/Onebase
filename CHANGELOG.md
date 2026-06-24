@@ -8,6 +8,13 @@ While the project is on `0.x`, minor version bumps (`0.1 → 0.2`) may include b
 
 ## [Unreleased]
 
+## [2.8.1] - 2026-06-24
+
+### Changed
+
+- **The Connect dialog is now tabbed.** The modal splits into an **Application** tab (the API URL / anon-key env vars + usage, visible to everyone) and an admin-only **Direct database** tab (the `ssh -L` command + `localhost` connection parameters for Power BI / SQL clients). The direct-database details were previously an appended section; non-admins now simply see the single Application view with no tab strip. Same information — just reorganised into tabs.
+- **The admin Settings page is split into API / Database / Logs categories** behind a Functions-style sub-sidebar, and the main sidebar entry is renamed from **Audit settings** to **Settings** (under a renamed **Administration** group). `/admin/settings` redirects to the API category. *API* holds the max-rows cap; *Database* holds the `bi_readonly` password rotation; *Logs* holds the audit log destination, database retention, and prune. No settings were removed — the page outgrew the audit-only name once it covered API and direct-database access too. Form redirects now land back on the relevant category; the whole area stays admin-only.
+
 ## [2.8.0] - 2026-06-24
 
 ### Added

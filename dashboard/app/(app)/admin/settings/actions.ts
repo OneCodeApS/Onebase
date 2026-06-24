@@ -38,7 +38,7 @@ export async function updateAuditSubdir(formData: FormData) {
   });
 
   const msg = sanitized === raw ? `Saved: ${sanitized}` : `Saved (sanitized): ${sanitized}`;
-  redirect("/admin/settings?ok=" + encodeURIComponent(msg));
+  redirect("/admin/settings/logs?ok=" + encodeURIComponent(msg));
 }
 
 export async function updateAuditRetention(formData: FormData) {
@@ -49,7 +49,7 @@ export async function updateAuditRetention(formData: FormData) {
   const n = Number(raw);
   if (!Number.isFinite(n) || n < 0 || !Number.isInteger(n)) {
     redirect(
-      "/admin/settings?error=" +
+      "/admin/settings/logs?error=" +
         encodeURIComponent("Retention must be a non-negative integer (0 = keep forever)."),
     );
   }
@@ -69,7 +69,7 @@ export async function updateAuditRetention(formData: FormData) {
   });
 
   const msg = n === 0 ? "Retention disabled (keep forever)" : `Retention: ${n} day(s)`;
-  redirect("/admin/settings?ok=" + encodeURIComponent(msg));
+  redirect("/admin/settings/logs?ok=" + encodeURIComponent(msg));
 }
 
 export async function updateApiMaxRows(formData: FormData) {
@@ -86,7 +86,7 @@ export async function updateApiMaxRows(formData: FormData) {
     const parsed = Number(raw);
     if (!Number.isFinite(parsed) || parsed < 1 || !Number.isInteger(parsed)) {
       redirect(
-        "/admin/settings?error=" +
+        "/admin/settings/api?error=" +
           encodeURIComponent(
             "Max rows must be a positive integer, or empty to use the default.",
           ),
@@ -118,7 +118,7 @@ export async function updateApiMaxRows(formData: FormData) {
     n === null
       ? "API max rows reset to the default. Restart PostgREST to apply."
       : `API max rows set to ${n}. Restart PostgREST to apply.`;
-  redirect("/admin/settings?ok=" + encodeURIComponent(msg));
+  redirect("/admin/settings/api?ok=" + encodeURIComponent(msg));
 }
 
 // Rotate the read-only `bi_readonly` database login (Power BI / SQL clients).
@@ -197,5 +197,5 @@ export async function runAuditPruneNow() {
       : result.deleted === 0
         ? `Nothing to prune (no rows older than ${result.retentionDays} day(s)).`
         : `Pruned ${result.deleted} row(s) older than ${result.retentionDays} day(s).`;
-  redirect("/admin/settings?ok=" + encodeURIComponent(msg));
+  redirect("/admin/settings/logs?ok=" + encodeURIComponent(msg));
 }
