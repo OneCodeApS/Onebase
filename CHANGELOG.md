@@ -8,6 +8,16 @@ While the project is on `0.x`, minor version bumps (`0.1 → 0.2`) may include b
 
 ## [Unreleased]
 
+## [2.9.0] - 2026-06-25
+
+### Added
+
+- **Edge functions (`/functions/v1/*`) are now CORS-wrapped.** Browser apps served from an allowed origin can finally invoke edge functions: the route answers the `OPTIONS` preflight with `corsPreflight` and adds `Access-Control-Allow-Origin` to every verb's response via `withCors`, both keyed off the same `auth_allowed_origins` allowlist (Authentication → CORS origins) already used by `/auth/v1/*`, `/realtime`, and the storage URL-issuance endpoints. Previously there was no platform-level CORS on functions at all — the preflight hit Next.js's auto-generated `OPTIONS` (204, no CORS headers) and the browser blocked the request before the POST was sent, even for functions that set their own CORS headers (the function never ran on a preflight). A function that sets its own `Access-Control-Allow-Origin` still works — `withCors` overwrites it with the allowlist-resolved value. **Operator action on an existing install:** add each browser origin that calls a function (e.g. `https://husliste.husportalen.miltonhuse.dk`) under Authentication → CORS origins, then deploy this dashboard image. Origins not on the list get a `403` on the preflight (browser blocks), exactly like `/auth/v1/*`.
+
+### Fixed
+
+- **CORS origins admin page no longer claims edge functions and realtime are unwrapped.** The "What this does not cover" note was stale — realtime was already CORS-wrapped, and functions are now wrapped too. The page lists `/realtime` and `/functions/v1/*` alongside `/auth/v1/*` as covered surfaces.
+
 ## [2.8.1] - 2026-06-24
 
 ### Changed

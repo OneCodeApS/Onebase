@@ -34,7 +34,9 @@ export default async function CorsPage({
         <p className="mt-1 text-sm text-neutral-500">
           Browser apps served from these origins may read responses from the
           public API. Applies to{" "}
-          <span className="font-mono text-neutral-300">/auth/v1/*</span> and the
+          <span className="font-mono text-neutral-300">/auth/v1/*</span>,{" "}
+          <span className="font-mono text-neutral-300">/realtime</span>,{" "}
+          <span className="font-mono text-neutral-300">/functions/v1/*</span>, and the
           storage URL-issuance endpoints (
           <span className="font-mono text-neutral-300">/storage/v1/object/sign</span>,{" "}
           <span className="font-mono text-neutral-300">sign-batch</span>,{" "}
@@ -120,8 +122,7 @@ export default async function CorsPage({
           PostgREST (<span className="font-mono">/rest/v1</span>,{" "}
           <span className="font-mono">/rpc/v1</span>) handles its own CORS, and
           actual file downloads/uploads go straight to MinIO — neither is
-          governed by this list. Edge functions and realtime are not wrapped with
-          CORS today.
+          governed by this list.
         </p>
       </Card>
     </main>

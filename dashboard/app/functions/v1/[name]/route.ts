@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { verifyJwtSignature } from "@/lib/auth-jwt";
 import { audit } from "@/lib/audit";
+import { withCors, corsPreflight } from "@/lib/cors";
 import {
   auditInvocation,
   executeFunction,
@@ -143,18 +144,25 @@ async function handle(
   return result.response;
 }
 
-export async function GET(req: NextRequest, ctx: { params: Promise<{ name: string }> }) {
-  return handle(req, ctx.params);
-}
-export async function POST(req: NextRequest, ctx: { params: Promise<{ name: string }> }) {
-  return handle(req, ctx.params);
-}
-export async function PUT(req: NextRequest, ctx: { params: Promise<{ name: string }> }) {
-  return handle(req, ctx.params);
-}
-export async function PATCH(req: NextRequest, ctx: { params: Promise<{ name: string }> }) {
-  return handle(req, ctx.params);
-}
-export async function DELETE(req: NextRequest, ctx: { params: Promise<{ name: string }> }) {
-  return handle(req, ctx.params);
-}
+// CORS: browser apps can't reach a function until the preflight passes and the
+// response carries Access-Control-Allow-Origin. We wrap every verb in withCors
+// (adds the headers for allowed origins) and answer OPTIONS preflights with
+// corsPreflight — both keyed off the same auth_allowed_origins allowlist as
+// /auth/v1/* and /realtime. A function that sets its own CORS headers still
+// works: withCors overwrites Allow-Origin with the allowlist-resolved value.
+// The route accepts all verbs, so the preflight advertises all of them.
+const METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE"] as const;
+
+type Ctx = { params: Promise<{ name: string }> };
+
+const wrapped = withCors<[Ctx]>(
+  (req, ctx) => handle(req, ctx.params),
+  { methods: METHODS },
+);
+
+export const GET = wrapped;
+export const POST = wrapped;
+export const PUT = wrapped;
+export const PATCH = wrapped;
+export const DELETE = wrapped;
+export const OPTIONS = corsPreflight({ methods: METHODS });
