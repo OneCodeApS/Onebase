@@ -8,6 +8,16 @@ While the project is on `0.x`, minor version bumps (`0.1 → 0.2`) may include b
 
 ## [Unreleased]
 
+## [2.9.1] - 2026-07-20
+
+### Added
+
+- **Search fields on the metadata admin pages.** RLS policies, Database functions, Grants, Enums, Edge functions, and Cron jobs each gain a filter box above their table, matching the existing Realtime page's filter (a `type="search"` input with a live "X of Y" count). Filtering is client-side over the rows already loaded for the current schema — no refetch — and each box searches the fields you'd actually look something up by: policies by table / policy name / role; DB functions by name / arguments / return type; grants by object or grantee role; enums by type name or value; edge functions by name or description; cron jobs by name / target function / schedule. Each table's list body was extracted into a small `"use client"` component; the surrounding page (schema picker, action buttons, RLS-status table) is unchanged.
+
+### Fixed
+
+- **The Enums page (`/admin/enums`) no longer fails to load.** `listEnums` built the values column with `array_agg(e.enumlabel …)`; because `enumlabel` is the Postgres `name` type, this produced a `name[]` (OID 1003) which node-postgres has no array parser for — the value arrived as a raw `"{a,b}"` string, so the page's `e.values.map(...)` threw `values.map is not a function` and the render crashed ("page couldn't load"). Fixed by casting to `text` — `array_agg(e.enumlabel::text …)` — so it comes back as a proper JS array, the same `::text[]` trick already used for `roles` in `listPolicies`. No migration or operator action needed; it's a dashboard-only query fix.
+
 ## [2.9.0] - 2026-06-25
 
 ### Added

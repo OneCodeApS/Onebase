@@ -435,9 +435,13 @@ export type EnumType = {
 export async function listEnums(schema: string): Promise<EnumType[]> {
   if (!SAFE_IDENT.test(schema)) return [];
   const { rows } = await pool().query<EnumType>(
+    // enumlabel is Postgres type `name`, so array_agg would yield a name[]
+    // (OID 1003) which node-postgres has no parser for — it would arrive as a
+    // raw "{a,b}" string and blow up `.map()` in the page. Cast to text[] so it
+    // comes back as a proper JS array. Same trick as roles::text[] in listPolicies.
     `SELECT n.nspname AS schema,
             t.typname AS name,
-            array_agg(e.enumlabel ORDER BY e.enumsortorder) AS values
+            array_agg(e.enumlabel::text ORDER BY e.enumsortorder) AS values
        FROM pg_type t
        JOIN pg_namespace n ON n.oid = t.typnamespace
        JOIN pg_enum     e ON e.enumtypid = t.oid
