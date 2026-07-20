@@ -1,7 +1,7 @@
 import Link from "next/link";
-import { Card } from "../../_components/Card";
 import { listEnums, listUserSchemas } from "@/lib/db-introspect";
 import { getSession } from "@/lib/session";
+import { EnumsTable } from "./_components/EnumsTable";
 
 const SYSTEM_SCHEMAS = new Set(["_dashboard", "auth"]);
 
@@ -62,52 +62,7 @@ export default async function EnumsPage({
         </div>
       </div>
 
-      <Card className="mt-6 overflow-x-auto">
-        <table className="w-full border-collapse text-sm">
-          <thead>
-            <tr className="border-b border-neutral-700 bg-neutral-800/60 text-left text-neutral-400">
-              <th className="px-3 py-2 font-normal">Type</th>
-              <th className="px-3 py-2 font-normal">Values</th>
-            </tr>
-          </thead>
-          <tbody>
-            {enums.length === 0 ? (
-              <tr>
-                <td colSpan={2} className="px-3 py-6 text-center text-neutral-500">
-                  No enum types in{" "}
-                  <span className="font-mono">{selectedSchema}</span>.
-                </td>
-              </tr>
-            ) : (
-              enums.map((e) => (
-                <tr
-                  key={`${e.schema}.${e.name}`}
-                  className="border-b border-neutral-800 align-top last:border-b-0 odd:bg-neutral-900 even:bg-neutral-950/40"
-                >
-                  <td className="whitespace-nowrap px-3 py-2 font-mono text-neutral-200">
-                    {e.name}
-                    <span className="ml-2 rounded border border-neutral-700 bg-neutral-800/40 px-1.5 py-0.5 text-[10px] text-neutral-500">
-                      {e.values.length}
-                    </span>
-                  </td>
-                  <td className="px-3 py-2">
-                    <span className="flex flex-wrap gap-1">
-                      {e.values.map((v) => (
-                        <span
-                          key={v}
-                          className="rounded bg-neutral-800 px-1.5 py-0.5 font-mono text-[11px] text-neutral-300"
-                        >
-                          {v}
-                        </span>
-                      ))}
-                    </span>
-                  </td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-      </Card>
+      <EnumsTable enums={enums} selectedSchema={selectedSchema} />
     </main>
   );
 }
