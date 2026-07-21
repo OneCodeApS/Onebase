@@ -20,6 +20,10 @@ function buildClient(): Client {
     useSSL: process.env.MINIO_USE_SSL === "true",
     accessKey,
     secretKey,
+    // Pin the region so minio-js signs locally instead of resolving it on demand
+    // via a `GET /<bucket>?location` request. Matches MinIO's default when
+    // MINIO_SITE_REGION is unset; set MINIO_REGION here if you run a custom one.
+    region: process.env.MINIO_REGION ?? "us-east-1",
   });
 }
 
@@ -64,6 +68,10 @@ function buildPublicClient(): Client | null {
       useSSL: u.protocol === "https:",
       accessKey,
       secretKey,
+      // Pin the region: without it minio-js does a `GET /<bucket>?location`
+      // lookup against this endpoint (the PUBLIC api host), where that path
+      // isn't routed to MinIO — Caddy 404s it and presigning throws "Not Found".
+      region: process.env.MINIO_REGION ?? "us-east-1",
     });
   } catch {
     return null;
