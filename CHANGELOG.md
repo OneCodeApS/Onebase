@@ -8,6 +8,12 @@ While the project is on `0.x`, minor version bumps (`0.1 → 0.2`) may include b
 
 ## [Unreleased]
 
+## [2.9.2] - 2026-07-21
+
+### Fixed
+
+- **Storage presigning no longer fails with `502 presign_failed: "Not Found"`.** `lib/minio.ts` built both the internal and public MinIO clients without a `region`, so minio-js resolved the bucket region on demand via a `GET /<bucket>?location` request against the client's own endpoint. For the **public-signing** client that endpoint is the public API host — where that path isn't proxied to MinIO (only `/storage/v1/object/*` is), so Caddy's catch-all returns 404 and `presignedPutObject`/`presignedGetObject` threw `Not Found`, 502'ing every external upload/download URL request. It went unnoticed because in-dashboard storage ops use the internal client against `minio:9000` (which answers the location request), and end-user uploads to private buckets were rejected earlier by policy — so the presign path was only reached once a bucket was made public and an authenticated client requested an upload URL. Fixed by passing `region: process.env.MINIO_REGION ?? "us-east-1"` to both clients so minio-js signs locally with no network lookup. `us-east-1` matches MinIO's default when `MINIO_SITE_REGION` is unset. Dashboard-only; no migration. **Operator note:** if you run MinIO with a custom `MINIO_SITE_REGION`, set the same value in the dashboard's `MINIO_REGION` env or signatures will be rejected.
+
 ## [2.9.1] - 2026-07-20
 
 ### Added
