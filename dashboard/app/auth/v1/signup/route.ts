@@ -1,4 +1,3 @@
-import crypto from "node:crypto";
 import { NextResponse, type NextRequest } from "next/server";
 import { signAccessToken } from "@/lib/auth-jwt";
 import {
@@ -12,56 +11,12 @@ import {
   getAuthSettings,
   getEmailProviderConfig,
   isProviderEnabled,
-  type PasswordRequirements,
 } from "@/lib/auth-settings";
+import { checkPasswordPolicy } from "@/lib/auth-password-policy";
 import { corsPreflight, withCors } from "@/lib/cors";
 import { checkRateLimit } from "@/lib/rate-limit";
 
 const METHODS = ["POST"] as const;
-
-function meetsRequirements(password: string, req: PasswordRequirements): boolean {
-  const hasLower = /[a-z]/.test(password);
-  const hasUpper = /[A-Z]/.test(password);
-  const hasDigit = /\d/.test(password);
-  const hasSymbol = /[^A-Za-z0-9]/.test(password);
-  switch (req) {
-    case "none":
-      return true;
-    case "lowercase_uppercase":
-      return hasLower && hasUpper;
-    case "lowercase_uppercase_digits":
-      return hasLower && hasUpper && hasDigit;
-    case "lowercase_uppercase_digits_symbols":
-      return hasLower && hasUpper && hasDigit && hasSymbol;
-  }
-}
-
-// HaveIBeenPwned k-anonymity: hash with SHA-1, send the first 5 chars to the
-// public API, receive ~500 suffixes; check ours against the list. The full
-// password never leaves this server.
-async function isPwned(password: string): Promise<boolean> {
-  try {
-    const hash = crypto
-      .createHash("sha1")
-      .update(password)
-      .digest("hex")
-      .toUpperCase();
-    const prefix = hash.slice(0, 5);
-    const suffix = hash.slice(5);
-    const res = await fetch(`https://api.pwnedpasswords.com/range/${prefix}`, {
-      headers: { "User-Agent": "onecodebase-auth" },
-    });
-    if (!res.ok) return false; // fail open on API issues
-    const text = await res.text();
-    for (const line of text.split("\n")) {
-      const [s] = line.split(":");
-      if (s.trim().toUpperCase() === suffix) return true;
-    }
-    return false;
-  } catch {
-    return false; // fail open on network issues
-  }
-}
 
 async function handler(req: NextRequest) {
   const [settings, emailEnabled, emailCfg] = await Promise.all([
@@ -97,35 +52,9 @@ async function handler(req: NextRequest) {
   if (!email.includes("@")) {
     return NextResponse.json({ error: "invalid_email" }, { status: 400 });
   }
-  if (password.length < emailCfg.min_password_length) {
-    return NextResponse.json(
-      {
-        error: "password_too_short",
-        detail: `Password must be at least ${emailCfg.min_password_length} characters`,
-      },
-      { status: 400 },
-    );
-  }
-  if (!meetsRequirements(password, emailCfg.password_requirements)) {
-    return NextResponse.json(
-      {
-        error: "password_too_weak",
-        detail:
-          "Password does not meet the required mix of character classes",
-        required: emailCfg.password_requirements,
-      },
-      { status: 400 },
-    );
-  }
-  if (emailCfg.prevent_leaked_passwords && (await isPwned(password))) {
-    return NextResponse.json(
-      {
-        error: "password_pwned",
-        detail:
-          "This password has appeared in a known data breach. Pick a different one.",
-      },
-      { status: 400 },
-    );
+  const rejection = await checkPasswordPolicy(password, emailCfg);
+  if (rejection) {
+    return NextResponse.json(rejection, { status: 400 });
   }
 
   const existing = await findUserByEmail(email);
