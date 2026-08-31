@@ -8,6 +8,14 @@ While the project is on `0.x`, minor version bumps (`0.1 → 0.2`) may include b
 
 ## [Unreleased]
 
+## [2.11.0] - 2026-08-31
+
+### Added
+
+- **The used / expired magic-link page can be given its own copy and a way onward.** Sign-in links are single-use, so a user who re-opens the mail a week later hits this page — it is a routine destination, not a rare error, and it dead-ended: one fixed English paragraph, on the `api.*` host, with no link anywhere. That is a support call for every user who clicks an old link, and it gets worse the moment an app moves people onto passwords, since their invitation link is spent the second they finish setting one. Four optional fields under Authentication → Providers → Magic link now shape it: `error_title`, `error_body`, `sign_in_url` and `sign_in_label`. With a URL set the page renders a button to the app's sign-in screen; the text fields let an operator write it in their users' language, rather than the platform guessing at one. Every field is optional and blank keeps today's exact English page, so no existing install changes behaviour. Config only — no migration.
+
+  The page still renders **one neutral response for every failure mode** (missing, expired, consumed, disabled account) and still never redirects, so it remains free of any oracle: the button is a static link the operator configured, not a destination derived from the request. `sign_in_url` is parsed and only `http`/`https` is rendered — a `javascript:` or `data:` URL is dropped and the page falls back to dead-ending. All four values are HTML-escaped.
+
 ## [2.10.0] - 2026-08-31
 
 ### Added

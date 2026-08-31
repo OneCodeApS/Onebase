@@ -466,6 +466,94 @@ export function ProviderConfigPanel({
                 30-day default for external-user portals.
               </p>
 
+              <div className="space-y-4 border-t border-neutral-800 pt-5">
+                <div>
+                  <h4 className="text-sm font-medium text-neutral-200">
+                    Used / expired link page
+                  </h4>
+                  <p className="mt-1 text-xs text-neutral-500">
+                    Shown when a link is invalid, expired or already used. Since
+                    links are single-use, a user re-opening the mail later lands
+                    here — it is a routine destination, not a rare error. Leave
+                    a field blank for the built-in English text.
+                  </p>
+                </div>
+
+                <div>
+                  <label
+                    htmlFor="ml-error-title"
+                    className="block text-xs uppercase tracking-wider text-neutral-500"
+                  >
+                    Heading
+                  </label>
+                  <input
+                    id="ml-error-title"
+                    type="text"
+                    name="error_title"
+                    defaultValue={String(cfg.error_title ?? "")}
+                    placeholder="This sign-in link is invalid or has expired"
+                    className="mt-1 w-full rounded border border-neutral-700 bg-neutral-900 px-2 py-1 text-sm"
+                  />
+                </div>
+
+                <div>
+                  <label
+                    htmlFor="ml-error-body"
+                    className="block text-xs uppercase tracking-wider text-neutral-500"
+                  >
+                    Body text
+                  </label>
+                  <textarea
+                    id="ml-error-body"
+                    name="error_body"
+                    rows={2}
+                    defaultValue={String(cfg.error_body ?? "")}
+                    placeholder="Sign-in links can only be used once and expire after a short time. Go back to the application and request a new one."
+                    className="mt-1 w-full rounded border border-neutral-700 bg-neutral-900 px-2 py-1 text-sm"
+                  />
+                </div>
+
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                  <div>
+                    <label
+                      htmlFor="ml-signin-url"
+                      className="block text-xs uppercase tracking-wider text-neutral-500"
+                    >
+                      Sign-in URL
+                    </label>
+                    <input
+                      id="ml-signin-url"
+                      type="url"
+                      name="sign_in_url"
+                      defaultValue={String(cfg.sign_in_url ?? "")}
+                      placeholder="https://app.example.com/login"
+                      className="mt-1 w-full rounded border border-neutral-700 bg-neutral-900 px-2 py-1 text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label
+                      htmlFor="ml-signin-label"
+                      className="block text-xs uppercase tracking-wider text-neutral-500"
+                    >
+                      Button label
+                    </label>
+                    <input
+                      id="ml-signin-label"
+                      type="text"
+                      name="sign_in_label"
+                      defaultValue={String(cfg.sign_in_label ?? "")}
+                      placeholder="Sign in"
+                      className="mt-1 w-full rounded border border-neutral-700 bg-neutral-900 px-2 py-1 text-sm"
+                    />
+                  </div>
+                </div>
+                <p className="text-xs text-neutral-500">
+                  With a URL set, the page offers a button onward instead of
+                  dead-ending — a user whose link is spent usually just needs
+                  the sign-in screen. Must be http(s); anything else is ignored.
+                </p>
+              </div>
+
               <div className="space-y-3 rounded border border-neutral-800 bg-neutral-900/40 p-3">
                 <div className="text-xs font-medium uppercase tracking-wider text-neutral-400">
                   For your client app

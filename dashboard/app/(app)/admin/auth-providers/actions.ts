@@ -134,6 +134,10 @@ export async function updateProvider(formData: FormData) {
       link_expiration_seconds: num("link_expiration_seconds", 900, 60, 3600),
       session_ttl_days: num("session_ttl_days", 30, 1, 30),
       max_per_hour: num("max_per_hour", 3, 1, 20),
+      error_title: String(formData.get("error_title") ?? "").trim(),
+      error_body: String(formData.get("error_body") ?? "").trim(),
+      sign_in_url: String(formData.get("sign_in_url") ?? "").trim(),
+      sign_in_label: String(formData.get("sign_in_label") ?? "").trim(),
     };
     // Only overwrite the password when the admin typed one — and only store
     // it encrypted. Refusing to save plaintext is deliberate: a DB dump must

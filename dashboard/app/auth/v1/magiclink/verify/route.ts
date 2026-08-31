@@ -34,7 +34,38 @@ const PAGE_STYLE = `
     p { color: #a3a3a3; font-size: 0.875rem; line-height: 1.5; }
     button { background: #2563eb; color: #fff; border: 0; border-radius: 0.375rem;
              padding: 0.625rem 1.25rem; font-size: 0.875rem; cursor: pointer; }
-    button:hover { background: #1d4ed8; }`;
+    button:hover { background: #1d4ed8; }
+    a.cta { display: inline-block; margin-top: 0.5rem; background: #2563eb; color: #fff;
+            border-radius: 0.375rem; padding: 0.625rem 1.25rem; font-size: 0.875rem;
+            text-decoration: none; }
+    a.cta:hover { background: #1d4ed8; }`;
+
+const DEFAULT_ERROR_TITLE = "This sign-in link is invalid or has expired";
+const DEFAULT_ERROR_BODY =
+  "Sign-in links can only be used once and expire after a short time. " +
+  "Go back to the application and request a new one.";
+
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+// Operator-supplied, but rendered into an href — so only http(s) survives.
+// Anything else (javascript:, data:) is dropped and the page dead-ends as
+// before rather than shipping a clickable script URL.
+function safeHttpUrl(raw: string): string | null {
+  if (!raw) return null;
+  try {
+    const u = new URL(raw);
+    return u.protocol === "https:" || u.protocol === "http:" ? u.toString() : null;
+  } catch {
+    return null;
+  }
+}
 
 function page(body: string, status: number): NextResponse {
   const html = `<!doctype html>
@@ -59,11 +90,26 @@ function page(body: string, status: number): NextResponse {
   });
 }
 
-function errorPage(): NextResponse {
+// One neutral page for every failure mode — missing, expired, consumed,
+// disabled account — so it stays free of any oracle. What the operator can
+// change is the copy and whether it offers a way onward: for a single-use link
+// the "already used" case is routine, and dead-ending a user who simply needs
+// the sign-in screen turns a normal event into a support call.
+async function errorPage(): Promise<NextResponse> {
+  const cfg = await getMagicLinkProviderConfig().catch(() => null);
+  const title = cfg?.error_title?.trim() || DEFAULT_ERROR_TITLE;
+  const bodyText = cfg?.error_body?.trim() || DEFAULT_ERROR_BODY;
+  const signInUrl = safeHttpUrl(cfg?.sign_in_url?.trim() ?? "");
+  const label = cfg?.sign_in_label?.trim() || "Sign in";
+
+  const cta = signInUrl
+    ? `<p><a class="cta" href="${escapeHtml(signInUrl)}">${escapeHtml(label)}</a></p>`
+    : "";
+
   return page(
-    `<h1>This sign-in link is invalid or has expired</h1>
-     <p>Sign-in links can only be used once and expire after a short time.
-        Go back to the application and request a new one.</p>`,
+    `<h1>${escapeHtml(title)}</h1>
+     <p>${escapeHtml(bodyText)}</p>
+     ${cta}`,
     400,
   );
 }
@@ -76,17 +122,17 @@ function hashToken(token: string): string {
 // user click through to a guaranteed failure), then the auto-submit page.
 // The token travels onward in the form body, not the URL.
 export async function GET(req: NextRequest) {
-  if (!(await isProviderEnabled("magiclink"))) return errorPage();
+  if (!(await isProviderEnabled("magiclink"))) return await errorPage();
 
   const token = req.nextUrl.searchParams.get("token");
-  if (!token) return errorPage();
+  if (!token) return await errorPage();
 
   const { rows } = await pool().query(
     `SELECT 1 FROM auth.magic_link_tokens
       WHERE token_hash = $1 AND consumed_at IS NULL AND expires_at > now()`,
     [hashToken(token)],
   );
-  if (rows.length === 0) return errorPage();
+  if (rows.length === 0) return await errorPage();
 
   // value is base64url (no quotes/angle brackets possible), but escape anyway.
   const safeToken = token.replace(/[^A-Za-z0-9_-]/g, "");
@@ -104,7 +150,7 @@ export async function GET(req: NextRequest) {
 
 // POST — consumes the token and redirects with tokens in the fragment.
 export async function POST(req: NextRequest) {
-  if (!(await isProviderEnabled("magiclink"))) return errorPage();
+  if (!(await isProviderEnabled("magiclink"))) return await errorPage();
 
   let token: string | null = null;
   try {
@@ -114,7 +160,7 @@ export async function POST(req: NextRequest) {
   } catch {
     token = null;
   }
-  if (!token) return errorPage();
+  if (!token) return await errorPage();
 
   // Atomic single-use consume: the consumed_at IS NULL guard means a
   // double-submit lets exactly one request win.
@@ -127,7 +173,7 @@ export async function POST(req: NextRequest) {
     RETURNING user_id, redirect_to`,
     [hashToken(token)],
   );
-  if (rows.length === 0) return errorPage();
+  if (rows.length === 0) return await errorPage();
   const { user_id, redirect_to } = rows[0];
 
   const userRes = await pool().query<{
@@ -136,12 +182,12 @@ export async function POST(req: NextRequest) {
     disabled_at: Date | null;
   }>(`SELECT id, email, disabled_at FROM auth.users WHERE id = $1`, [user_id]);
   const user = userRes.rows[0];
-  if (!user || user.disabled_at) return errorPage();
+  if (!user || user.disabled_at) return await errorPage();
 
   // redirect_to was validated and pinned at request time; re-check against
   // the current allowlist in case it shrank since the link was issued.
   const redirectTo = await validateRedirectTarget(redirect_to);
-  if (!redirectTo) return errorPage();
+  if (!redirectTo) return await errorPage();
 
   const cfg = await getMagicLinkProviderConfig();
   const ua = req.headers.get("user-agent");

@@ -142,6 +142,19 @@ export type MagicLinkProviderConfig = {
   // Per-user request cap (rolling hour). Exceeding it is silently ignored so
   // the response never reveals whether an account exists.
   max_per_hour: number;
+  // Copy for the page shown when a link is invalid, expired or already used.
+  // A single-use link that has been used is the ordinary end state — the user
+  // clicks the mail again a week later — so this page is a normal destination,
+  // not a rare error. Blank falls back to the built-in English text, which is
+  // why these are strings and not baked into the route: the platform hosts apps
+  // in several languages, so the operator supplies their own.
+  error_title: string;
+  error_body: string;
+  // When set, the page offers a way onward instead of dead-ending: the user
+  // most likely already has a password and simply needs the sign-in screen.
+  // Must be http(s) — the page refuses to render any other scheme.
+  sign_in_url: string;
+  sign_in_label: string;
 };
 
 export const MAGICLINK_DEFAULTS: MagicLinkProviderConfig = {
@@ -156,6 +169,10 @@ export const MAGICLINK_DEFAULTS: MagicLinkProviderConfig = {
   link_expiration_seconds: 900,
   session_ttl_days: 30,
   max_per_hour: 3,
+  error_title: "",
+  error_body: "",
+  sign_in_url: "",
+  sign_in_label: "",
 };
 
 export async function getMagicLinkProviderConfig(): Promise<MagicLinkProviderConfig> {
