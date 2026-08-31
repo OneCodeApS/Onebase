@@ -20,6 +20,10 @@ const DEFAULTS: Record<string, { max_attempts: number; window_seconds: number }>
   signin: { max_attempts: 10, window_seconds: 300 },
   signup: { max_attempts: 5, window_seconds: 3600 },
   magiclink: { max_attempts: 10, window_seconds: 600 },
+  // Keyed per user id, not per IP — PUT /auth/v1/user is authenticated, so the
+  // account is the meaningful subject, and an office behind one egress IP must
+  // not burn through each other's budget.
+  password_update: { max_attempts: 5, window_seconds: 900 },
 };
 
 // Small per-process cache so we don't read config on every attempt. Config

@@ -18,9 +18,12 @@ CREATE TABLE _dashboard.rate_limits (
 
 -- Sensible per-IP defaults; admins tune them in the dashboard.
 INSERT INTO _dashboard.rate_limits (area, max_attempts, window_seconds) VALUES
-	('signin',    10, 300),   -- 10 attempts / 5 min
-	('signup',     5, 3600),  -- 5 / hour
-	('magiclink', 10, 600);   -- 10 / 10 min
+	('signin',          10, 300),   -- 10 attempts / 5 min
+	('signup',           5, 3600),  -- 5 / hour
+	('magiclink',       10, 600),   -- 10 / 10 min
+	-- PUT /auth/v1/user. Keyed per user id rather than per IP: the endpoint is
+	-- authenticated, so the account is the meaningful subject.
+	('password_update',  5, 900);   -- 5 / 15 min
 
 -- Fixed-window counters, one row per "<area>:<identifier>" key.
 CREATE TABLE _dashboard.rate_limit_hits (

@@ -8,6 +8,24 @@ While the project is on `0.x`, minor version bumps (`0.1 → 0.2`) may include b
 
 ## [Unreleased]
 
+## [2.10.0] - 2026-08-31
+
+### Added
+
+- **`PUT /auth/v1/user` — end users can set or change their own password.** Until now the only way an end user got a password was `/auth/v1/signup`; there was no way to set one afterwards. An account created without a password — invited by magic link, or arriving via Microsoft OAuth — could therefore never move to password sign-in, and nobody could rotate a password they already had. The dashboard's `resetEndUserPassword` admin action could do it, but only an operator could reach that. The endpoint takes `{ password, current_password? }` with the caller's access token, enforces the email provider's password policy, hashes with the same Argon2id parameters as sign-up, and returns a fresh access + refresh token pair. It answers `403 email_provider_disabled` when the email provider is off, mirroring sign-in. `GET /auth/v1/user` gains a derived `has_password` boolean (never the hash) so an app can tell "finish your invitation" from "change your password" without a second round-trip.
+
+  Two callers are distinguished deliberately. A user who has **no** password yet is completing an invitation — there is nothing to re-authenticate against, so the re-auth toggles do not apply; demanding a current password there would make the invite flow impossible. A user changing an **existing** password must re-authenticate when the configuration asks for it. On success every existing session is revoked, so a password change signs the user's other devices out — and a new session is minted for the caller in the same response, because revoking without re-issuing would sign them out of the page they are standing on.
+
+### Changed
+
+- **"Secure password change" and "Require current password when updating" are now enforced.** Both toggles were persisted and shown under Authentication → Providers → Email but marked `pending`, because nothing consumed them — they were waiting for exactly this endpoint. `require_current_password_on_update` demands the current password on every change; `secure_password_change` demands it only when the last sign-in is older than 24h. The `pending` badge is gone from both, and their descriptions now say what they actually do. `secure_email_change` stays pending — that one still needs an email-change endpoint. **Operator note:** both default to on, so an app changing an *existing* password must send `current_password` or it gets `400 current_password_required`. First-time password sets are unaffected.
+
+- **The password policy lives in one module.** `meetsRequirements` and the HaveIBeenPwned `isPwned` check were local functions inside `signup/route.ts`. A second endpoint needed the same rules, and copying them would have let sign-up and password-update drift apart over time. Both now call `checkPasswordPolicy()` from `lib/auth-password-policy.ts`, which returns the 400 body or `null`. Behaviour and error codes (`password_too_short`, `password_too_weak`, `password_pwned`) are unchanged.
+
+### Database
+
+- **`0032_password_update_rate_limit.sql`** — seeds the `password_update` rate-limit area (5 attempts / 15 min). Without it the new endpoint falls back to the generic 30-per-minute default in `lib/rate-limit.ts`, far too generous for an endpoint that, with "require current password" on, is an oracle for guessing the existing one. The counter is keyed on the user id rather than the IP, since the caller is authenticated and a whole subcontractor office can share one egress IP. Mirrored into `postgres/init/13_rate_limits.sql` for fresh installs. **On an existing install, apply migration `0032` before deploying** — the endpoint works without it, but at the loose default limit.
+
 ## [2.9.2] - 2026-07-21
 
 ### Fixed

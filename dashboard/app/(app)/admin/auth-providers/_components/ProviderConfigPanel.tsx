@@ -494,15 +494,13 @@ export function ProviderConfigPanel({
                 name="secure_password_change"
                 defaultChecked={Boolean(cfg.secure_password_change ?? true)}
                 label="Secure password change"
-                description="Require a recent login (within 24h) to change password without re-auth. Not yet enforced — needs a password-change endpoint."
-                pending
+                description="On PUT /auth/v1/user, a user whose last sign-in is older than 24h must supply their current password. Does not apply to a user setting a first password (invited by magic link, or arriving via Microsoft) — there is nothing to re-auth against."
               />
               <ToggleField
                 name="require_current_password_on_update"
                 defaultChecked={Boolean(cfg.require_current_password_on_update ?? true)}
                 label="Require current password when updating"
-                description="User must supply their existing password when changing it. Not yet enforced — needs a password-change endpoint."
-                pending
+                description="On PUT /auth/v1/user, always require the existing password, however recent the last sign-in. Same exception: a first password needs none."
               />
               <ToggleField
                 name="prevent_leaked_passwords"
