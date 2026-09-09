@@ -1,6 +1,7 @@
+import { Suspense } from "react";
 import Link from "next/link";
 import { getSession } from "@/lib/session";
-import { formatBytes, getDashboardStats } from "@/lib/stats";
+import { formatBytes, getDashboardStats, getStorageUsage } from "@/lib/stats";
 import { Card } from "./_components/Card";
 
 function StatCard({
@@ -12,7 +13,7 @@ function StatCard({
   href?: string;
   label: string;
   value: string | number;
-  hint?: string;
+  hint?: React.ReactNode;
 }) {
   const body = (
     <Card padded className="h-full">
@@ -29,6 +30,43 @@ function StatCard({
       {body}
     </Link>
   );
+}
+
+// Object-storage usage needs a walk over every key, so it is fetched outside
+// the main stats query and streamed in behind <Suspense>. The rest of the page
+// paints immediately instead of waiting on MinIO.
+function usageHint(objects: number, partial: boolean, suffix = ""): string {
+  const n = objects.toLocaleString();
+  return `${partial ? "at least " : ""}${n} object${objects === 1 ? "" : "s"}${suffix}`;
+}
+
+async function StorageObjectsHint() {
+  const usage = await getStorageUsage();
+  return (
+    <>
+      {usageHint(usage.objects, usage.partial)} · {formatBytes(usage.bytes)}
+      {usage.partial && "+"}
+    </>
+  );
+}
+
+async function StorageUsageCard({ buckets }: { buckets: number }) {
+  const usage = await getStorageUsage();
+  return (
+    <StatCard
+      label="Object storage"
+      value={`${formatBytes(usage.bytes)}${usage.partial ? "+" : ""}`}
+      hint={usageHint(
+        usage.objects,
+        usage.partial,
+        ` across ${buckets} bucket${buckets === 1 ? "" : "s"}`,
+      )}
+    />
+  );
+}
+
+function UsageCardSkeleton() {
+  return <StatCard label="Object storage" value="…" hint="measuring…" />;
 }
 
 export default async function Home() {
@@ -59,7 +97,11 @@ export default async function Home() {
           href="/storage"
           label="Storage buckets"
           value={stats.buckets}
-          hint={`${stats.minio.objects} object${stats.minio.objects === 1 ? "" : "s"} · ${formatBytes(stats.minio.bytes)}`}
+          hint={
+            <Suspense fallback="measuring…">
+              <StorageObjectsHint />
+            </Suspense>
+          }
         />
         {isAdmin && stats.admin && (
           <>
@@ -105,11 +147,9 @@ export default async function Home() {
               value={formatBytes(stats.admin.dbBytes)}
               hint={`audit_log: ${formatBytes(stats.admin.auditTableBytes)}`}
             />
-            <StatCard
-              label="Object storage"
-              value={formatBytes(stats.minio.bytes)}
-              hint={`${stats.minio.objects} object${stats.minio.objects === 1 ? "" : "s"} across ${stats.buckets} bucket${stats.buckets === 1 ? "" : "s"}`}
-            />
+            <Suspense fallback={<UsageCardSkeleton />}>
+              <StorageUsageCard buckets={stats.buckets} />
+            </Suspense>
             <StatCard
               label="Audit files"
               value={formatBytes(stats.admin.auditFilesBytes)}

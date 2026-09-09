@@ -2,7 +2,12 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { minio } from "@/lib/minio";
 import { getSession } from "@/lib/session";
-import { FOLDER_PLACEHOLDER, getBucketPolicy, normalizePrefix } from "@/lib/storage";
+import {
+  getBucketPolicy,
+  listLevel,
+  normalizePrefix,
+  normalizeSearch,
+} from "@/lib/storage";
 import { Card } from "../../_components/Card";
 import { ConfirmDeleteForm } from "../../_components/ConfirmDeleteForm";
 import { deleteBucket, uploadObject } from "../actions";
@@ -12,54 +17,17 @@ import { SettingsModal } from "./_components/SettingsModal";
 
 const SAFE_BUCKET = /^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/;
 
-type ObjectEntry = {
-  name: string;
-  size: number;
-  lastModified: Date;
-  etag: string;
-};
-
-type Listing = { folders: string[]; files: ObjectEntry[] };
-
-// Lists a single level (non-recursive) under `prefix`. MinIO returns the
-// subfolders at this level as "common prefix" entries (obj.prefix) and the
-// files as regular objects (obj.name). The zero-byte folder placeholder for
-// the current folder is filtered out so it never shows as a file.
-async function listLevel(bucket: string, prefix: string): Promise<Listing> {
-  return new Promise((resolve, reject) => {
-    const folders: string[] = [];
-    const files: ObjectEntry[] = [];
-    const stream = minio.listObjectsV2(bucket, prefix, false);
-    stream.on("data", (obj) => {
-      if (obj.prefix) {
-        folders.push(obj.prefix);
-      } else if (obj.name && obj.name !== `${prefix}${FOLDER_PLACEHOLDER}`) {
-        files.push({
-          name: obj.name,
-          size: obj.size,
-          lastModified: obj.lastModified,
-          etag: obj.etag,
-        });
-      }
-    });
-    stream.on("end", () => resolve({ folders, files }));
-    stream.on("error", reject);
-  });
-}
-
-function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(1)} KB`;
-  if (bytes < 1024 ** 3) return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
-  return `${(bytes / 1024 ** 3).toFixed(2)} GB`;
-}
-
 export default async function BucketPage({
   params,
   searchParams,
 }: {
   params: Promise<{ bucket: string }>;
-  searchParams: Promise<{ error?: string; ok?: string; prefix?: string }>;
+  searchParams: Promise<{
+    error?: string;
+    ok?: string;
+    prefix?: string;
+    q?: string;
+  }>;
 }) {
   const { bucket: rawBucket } = await params;
   const sp = await searchParams;
@@ -68,6 +36,7 @@ export default async function BucketPage({
   if (!SAFE_BUCKET.test(bucket)) notFound();
 
   const prefix = normalizePrefix(sp.prefix);
+  const search = normalizeSearch(sp.q);
 
   const session = await getSession();
   const canWrite = session.role !== "read_only";
@@ -82,13 +51,21 @@ export default async function BucketPage({
   }
   if (!exists) notFound();
 
-  const [{ folders, files }, policy] = await Promise.all([
-    listLevel(bucket, prefix),
+  // Only the FIRST page is fetched here; the rest is pulled in on demand by
+  // ObjectList. A folder holding 10k entries now costs one round trip, not ten.
+  const [page, policy] = await Promise.all([
+    listLevel(bucket, prefix, { search }),
     getBucketPolicy(bucket),
   ]);
-  const totalSize = files.reduce((sum, o) => sum + o.size, 0);
+
   const atRoot = prefix === "";
-  const isEmpty = folders.length === 0 && files.length === 0;
+  // Page one came back empty with nothing following it, so the bucket really is
+  // empty and offering "Delete bucket" is safe.
+  const isEmpty =
+    !search &&
+    page.folders.length === 0 &&
+    page.files.length === 0 &&
+    page.nextToken === null;
 
   // Breadcrumb: bucket root + one crumb per path segment, each linking to its
   // own cumulative prefix.
@@ -124,13 +101,7 @@ export default async function BucketPage({
             </span>
           </div>
           <p className="mt-1 text-sm text-neutral-500">
-            {folders.length > 0 && (
-              <>
-                {folders.length} {folders.length === 1 ? "folder" : "folders"} ·{" "}
-              </>
-            )}
-            {files.length} {files.length === 1 ? "object" : "objects"} ·{" "}
-            {formatSize(totalSize)} · max upload {policy.max_upload_mb} MB
+            max upload {policy.max_upload_mb} MB
             {policy.allowed_mime && policy.allowed_mime.length > 0 && (
               <> · allowed: {policy.allowed_mime.join(", ")}</>
             )}
@@ -234,12 +205,48 @@ export default async function BucketPage({
         </Card>
       )}
 
-      <Card className="mt-6 overflow-x-auto">
+      {/* Name filter. Plain GET form: it re-renders this page against a
+          narrower S3 prefix, which is the only way to find one entry in a
+          folder of 10k without listing all of them. Prefix match, not
+          substring — S3 cannot do substring without a full walk. */}
+      <form method="get" className="mt-6 flex flex-wrap items-center gap-2">
+        <input type="hidden" name="prefix" value={prefix} />
+        <input
+          type="text"
+          name="q"
+          defaultValue={search}
+          placeholder="Name starts with…"
+          className="w-64 rounded border border-neutral-700 bg-neutral-950 px-2 py-1 font-mono text-sm"
+        />
+        <button
+          type="submit"
+          className="rounded border border-neutral-700 bg-neutral-800 px-3 py-1 text-sm hover:bg-neutral-700"
+        >
+          Filter
+        </button>
+        {search && (
+          <Link
+            href={`/storage/${encodeURIComponent(bucket)}${
+              prefix ? `?prefix=${encodeURIComponent(prefix)}` : ""
+            }`}
+            className="rounded border border-neutral-700 px-3 py-1 text-sm hover:bg-neutral-800"
+          >
+            Clear
+          </Link>
+        )}
+      </form>
+
+      <Card className="mt-3 overflow-x-auto">
+        {/* Keyed on folder+filter so the accumulated pages reset on navigation
+            rather than appending to a stale list. */}
         <ObjectList
+          key={`${prefix}|${search}`}
           bucket={bucket}
           prefix={prefix}
-          folders={folders}
-          files={files}
+          search={search}
+          initialFolders={page.folders}
+          initialFiles={page.files}
+          initialToken={page.nextToken}
           canWrite={canWrite}
         />
       </Card>
