@@ -7,13 +7,17 @@ import { revalidatePath } from "next/cache";
 import { minio, publicObjectUrl, publicSignedObjectUrl } from "@/lib/minio";
 import {
   FOLDER_PLACEHOLDER,
+  forEachKeyBatch,
   getBucketPolicy,
   isValidSegment,
+  listLevel,
   mimeAllowed,
   normalizePrefix,
+  normalizeSearch,
   publicReadPolicy,
   setBucketPolicy,
   type BucketPolicy,
+  type LevelPage,
   type Visibility,
 } from "@/lib/storage";
 import { getSession } from "@/lib/session";
@@ -67,17 +71,32 @@ function bucketHref(
   return `/storage/${bucket}${qs ? `?${qs}` : ""}`;
 }
 
-// Recursively collects every object key under a prefix — used to delete a
-// folder (S3 has no folder primitive, so we remove all keys beneath it).
-function listAllKeys(bucket: string, prefix: string): Promise<string[]> {
-  return new Promise((resolve, reject) => {
-    const keys: string[] = [];
-    const stream = minio.listObjectsV2(bucket, prefix, true);
-    stream.on("data", (o) => {
-      if (o.name) keys.push(o.name);
-    });
-    stream.on("end", () => resolve(keys));
-    stream.on("error", reject);
+// Fetches the next page of a folder listing for the object browser. The bucket
+// page renders only the first page; this is what its "Load more" button calls,
+// so a folder with 10k entries is paged in on demand instead of being shipped
+// to the browser in one go.
+//
+// Every argument comes from the client, so all three are re-validated here —
+// this is a public entry point, not an internal helper.
+export async function loadMoreObjects(
+  rawBucket: string,
+  rawPrefix: string,
+  rawSearch: string,
+  token: string,
+): Promise<LevelPage> {
+  await requireSession();
+
+  const bucket = String(rawBucket ?? "").trim();
+  if (!BUCKET_NAME.test(bucket)) {
+    throw new Error("Invalid bucket name");
+  }
+  if (typeof token !== "string" || token.length === 0) {
+    throw new Error("Missing continuation token");
+  }
+
+  return listLevel(bucket, normalizePrefix(rawPrefix), {
+    search: normalizeSearch(rawSearch),
+    token,
   });
 }
 
@@ -298,9 +317,24 @@ export async function deleteFolder(formData: FormData) {
   let errMsg: string | null = null;
   let count = 0;
   try {
-    const keys = await listAllKeys(bucket, folder);
-    count = keys.length;
-    if (keys.length > 0) await minio.removeObjects(bucket, keys);
+    // Page through the folder's keys and delete each batch as it arrives.
+    // Buffering the whole key set first was fine for a few files and a memory
+    // blow-up for a folder holding hundreds of thousands.
+    await forEachKeyBatch(bucket, folder, async (keys) => {
+      // DeleteObjects reports per-key failures in its response body instead of
+      // throwing, so a partial failure would otherwise be silently counted as
+      // a success.
+      const res = await minio.removeObjects(bucket, keys);
+      const failed = res?.find((r) => r?.Error);
+      if (failed?.Error) {
+        throw new Error(
+          `Failed to delete ${failed.Error.Key ?? "an object"}: ${
+            failed.Error.Message ?? failed.Error.Code ?? "unknown error"
+          }`,
+        );
+      }
+      count += keys.length;
+    });
   } catch (e) {
     errMsg = (e as Error).message;
   }

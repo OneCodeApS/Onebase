@@ -3,13 +3,20 @@ import path from "node:path";
 import { pool } from "./db";
 import { minio } from "./minio";
 
-// Public-facing stats. Includes the storage walk because it's the same
-// information any signed-in user already sees by browsing the storage page;
-// hiding it here would be cosmetic.
+// Public-facing stats. Cheap counts only — object-storage usage is NOT in here
+// because measuring it means walking every key in every bucket. That lives in
+// getStorageUsage() below, which the page renders behind its own <Suspense>.
 export type PublicStats = {
   tables: number;
   buckets: number;
-  minio: { objects: number; bytes: number };
+};
+
+// Object-storage usage. `partial` is true when the walk hit MAX_SCAN_OBJECTS
+// and stopped, in which case the numbers are a floor, not a total.
+export type StorageUsage = {
+  objects: number;
+  bytes: number;
+  partial: boolean;
 };
 
 // Admin-only stats. Cheap counts plus the capacity section.
@@ -45,28 +52,62 @@ async function countTables(): Promise<number> {
   return Number(rows[0]?.n ?? 0);
 }
 
-async function getMinioStats(): Promise<{
-  buckets: number;
-  objects: number;
-  bytes: number;
-}> {
-  let buckets = 0;
+async function countBuckets(): Promise<number> {
+  try {
+    return (await minio.listBuckets()).length;
+  } catch (e) {
+    console.error("[stats] failed listing buckets", e);
+    return 0;
+  }
+}
+
+// Measuring object-storage usage means listing every key in every bucket —
+// there is no S3 call that reports it. On an install with hundreds of thousands
+// of objects the old unbounded walk ran on every dashboard render and blocked
+// the whole page behind it. Two bounds now apply: the walk stops after
+// MAX_SCAN_OBJECTS keys (reporting `partial`), and the result is cached for
+// CACHE_TTL_MS so a page reload doesn't re-walk. Both are advisory numbers on a
+// stat card, so a few minutes of staleness costs nothing.
+const MAX_SCAN_OBJECTS = Number(process.env.STORAGE_STATS_MAX_OBJECTS ?? 50_000);
+const CACHE_TTL_MS = Number(process.env.STORAGE_STATS_TTL_SECONDS ?? 300) * 1000;
+
+declare global {
+  // eslint-disable-next-line no-var
+  var __storageUsage:
+    | { at: number; value: StorageUsage }
+    | undefined;
+  // eslint-disable-next-line no-var
+  var __storageUsageInflight: Promise<StorageUsage> | undefined;
+}
+
+async function scanStorageUsage(): Promise<StorageUsage> {
   let objects = 0;
   let bytes = 0;
+  let partial = false;
+
   try {
-    const list = await minio.listBuckets();
-    buckets = list.length;
-    for (const b of list) {
+    for (const b of await minio.listBuckets()) {
+      if (objects >= MAX_SCAN_OBJECTS) {
+        partial = true;
+        break;
+      }
       try {
-        await new Promise<void>((resolve, reject) => {
-          const stream = minio.listObjectsV2(b.name, "", true);
-          stream.on("data", (o) => {
+        let token = "";
+        for (;;) {
+          // Flat listing (no delimiter) one S3 page at a time, so the loop can
+          // stop at the cap instead of draining the whole bucket.
+          const res = await minio.listObjectsV2Query(b.name, "", token, "", 1000, "");
+          for (const o of res.objects) {
             objects += 1;
             bytes += o.size ?? 0;
-          });
-          stream.on("end", () => resolve());
-          stream.on("error", reject);
-        });
+          }
+          if (objects >= MAX_SCAN_OBJECTS) {
+            partial = partial || res.isTruncated;
+            break;
+          }
+          if (!res.isTruncated || !res.nextContinuationToken) break;
+          token = String(res.nextContinuationToken);
+        }
       } catch (e) {
         // One bad bucket shouldn't sink the whole page. Log and move on.
         console.error(`[stats] failed listing bucket ${b.name}`, e);
@@ -75,7 +116,27 @@ async function getMinioStats(): Promise<{
   } catch (e) {
     console.error("[stats] failed listing buckets", e);
   }
-  return { buckets, objects, bytes };
+
+  return { objects, bytes, partial };
+}
+
+// Cached, deduplicated storage usage. Concurrent callers share one walk.
+export async function getStorageUsage(): Promise<StorageUsage> {
+  const cached = globalThis.__storageUsage;
+  if (cached && Date.now() - cached.at < CACHE_TTL_MS) return cached.value;
+  if (globalThis.__storageUsageInflight) return globalThis.__storageUsageInflight;
+
+  const run = scanStorageUsage()
+    .then((value) => {
+      globalThis.__storageUsage = { at: Date.now(), value };
+      return value;
+    })
+    .finally(() => {
+      globalThis.__storageUsageInflight = undefined;
+    });
+
+  globalThis.__storageUsageInflight = run;
+  return run;
 }
 
 async function getAuditFileStats(): Promise<{ bytes: number; count: number }> {
@@ -228,17 +289,13 @@ async function getCapacity() {
 
 export async function getDashboardStats(isAdmin: boolean): Promise<DashboardStats> {
   if (!isAdmin) {
-    const [tables, minioStats] = await Promise.all([countTables(), getMinioStats()]);
-    return {
-      tables,
-      buckets: minioStats.buckets,
-      minio: { objects: minioStats.objects, bytes: minioStats.bytes },
-    };
+    const [tables, buckets] = await Promise.all([countTables(), countBuckets()]);
+    return { tables, buckets };
   }
 
-  const [tables, minioStats, counts, capacity, dbHealth] = await Promise.all([
+  const [tables, buckets, counts, capacity, dbHealth] = await Promise.all([
     countTables(),
-    getMinioStats(),
+    countBuckets(),
     getCounts(),
     getCapacity(),
     getDbHealth(),
@@ -246,8 +303,7 @@ export async function getDashboardStats(isAdmin: boolean): Promise<DashboardStat
 
   return {
     tables,
-    buckets: minioStats.buckets,
-    minio: { objects: minioStats.objects, bytes: minioStats.bytes },
+    buckets,
     admin: {
       ...counts,
       ...capacity,

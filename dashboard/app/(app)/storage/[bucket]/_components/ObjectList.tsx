@@ -1,9 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useState, useTransition } from "react";
 import { ConfirmDeleteForm } from "../../../_components/ConfirmDeleteForm";
-import { deleteFolder } from "../../actions";
+import { deleteFolder, loadMoreObjects } from "../../actions";
 import { FileDetailPanel, type FileEntry } from "./FileDetailPanel";
 
 function formatSize(bytes: number): string {
@@ -16,21 +16,53 @@ function formatSize(bytes: number): string {
 // Renders one folder level: subfolder rows (navigate into / delete) followed by
 // file rows (click opens the detail panel). Names are shown relative to the
 // current prefix; the full key is kept for every action.
+//
+// Only the first page arrives as props. Everything after it is appended by the
+// loadMoreObjects server action, one S3 page at a time — a folder with 10k+
+// entries used to be rendered as 10k+ table rows in a single pass, which is
+// what froze the tab. The parent keys this component on prefix+search so the
+// accumulated pages reset when the user navigates.
 export function ObjectList({
   bucket,
   prefix,
-  folders,
-  files,
+  search,
+  initialFolders,
+  initialFiles,
+  initialToken,
   canWrite,
 }: {
   bucket: string;
   prefix: string;
-  folders: string[];
-  files: FileEntry[];
+  search: string;
+  initialFolders: string[];
+  initialFiles: FileEntry[];
+  initialToken: string | null;
   canWrite: boolean;
 }) {
   const [selected, setSelected] = useState<FileEntry | null>(null);
+  const [folders, setFolders] = useState(initialFolders);
+  const [files, setFiles] = useState(initialFiles);
+  const [token, setToken] = useState(initialToken);
+  const [error, setError] = useState<string | null>(null);
+  const [pending, startTransition] = useTransition();
+
   const isEmpty = folders.length === 0 && files.length === 0;
+  const loadedSize = files.reduce((sum, f) => sum + f.size, 0);
+
+  function loadMore() {
+    if (!token || pending) return;
+    setError(null);
+    startTransition(async () => {
+      try {
+        const next = await loadMoreObjects(bucket, prefix, search, token);
+        setFolders((prev) => [...prev, ...next.folders]);
+        setFiles((prev) => [...prev, ...next.files]);
+        setToken(next.nextToken);
+      } catch (e) {
+        setError((e as Error).message || "Failed to load more objects");
+      }
+    });
+  }
 
   function folderHref(folderPrefix: string): string {
     return `/storage/${encodeURIComponent(bucket)}?prefix=${encodeURIComponent(
@@ -51,8 +83,15 @@ export function ObjectList({
         <tbody>
           {isEmpty ? (
             <tr>
-              <td colSpan={3} className="px-3 py-6 text-center text-neutral-500">
-                {prefix ? "Empty folder." : "Empty bucket."}
+              <td
+                colSpan={3}
+                className="px-3 py-6 text-center text-neutral-500"
+              >
+                {search
+                  ? `Nothing here starts with "${search}".`
+                  : prefix
+                    ? "Empty folder."
+                    : "Empty bucket."}
               </td>
             </tr>
           ) : (
@@ -141,6 +180,41 @@ export function ObjectList({
           )}
         </tbody>
       </table>
+
+      {/* Counts describe what is loaded, not the folder total: S3 can't report
+          a folder's size or entry count without walking every key in it. The
+          empty-state row already says everything there is to say. */}
+      {!isEmpty && (
+        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-neutral-800 px-3 py-2 text-xs text-neutral-500">
+          <span>
+            {folders.length > 0 && (
+              <>
+                {folders.length} {folders.length === 1 ? "folder" : "folders"}{" "}
+                ·{" "}
+              </>
+            )}
+            {files.length} {files.length === 1 ? "object" : "objects"} ·{" "}
+            {formatSize(loadedSize)}
+            {token && <> loaded so far — there are more</>}
+          </span>
+          {token && (
+            <button
+              type="button"
+              onClick={loadMore}
+              disabled={pending}
+              className="rounded border border-neutral-700 bg-neutral-800 px-3 py-1 text-xs text-neutral-100 hover:bg-neutral-700 disabled:opacity-50"
+            >
+              {pending ? "Loading…" : "Load more"}
+            </button>
+          )}
+        </div>
+      )}
+
+      {error && (
+        <p className="border-t border-red-900/50 bg-red-950/30 px-3 py-2 text-xs text-red-300">
+          {error}
+        </p>
+      )}
 
       {selected && (
         <FileDetailPanel

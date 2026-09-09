@@ -8,6 +8,27 @@ While the project is on `0.x`, minor version bumps (`0.1 → 0.2`) may include b
 
 ## [Unreleased]
 
+## [2.12.0] - 2026-09-09
+
+### Fixed
+
+- **The storage object browser no longer hangs the dashboard on buckets with more than ~10,000 folders, or folders with more than ~10,000 files.** `listLevel` in the bucket page drained minio-js's `listObjectsV2` *stream* to exhaustion before rendering anything. S3 returns at most 1,000 entries per response, so a level holding 10k entries cost ten sequential round trips to MinIO, buffered the entire listing server-side, serialised all 10k rows into the RSC payload, and then asked React to mount 10k `<tr>`s in one pass — several megabytes over the wire and a browser tab pinned at 100% CPU long enough to look like a hang. The listing is now cursor-based: the page issues exactly **one** `ListObjectsV2` request for the first 200 entries and hands the continuation token to the client, which pulls the next page only when the user presses **Load more**. Time-to-first-row is now independent of how large the folder is. Dashboard-only; no migration, no operator action.
+
+- **The dashboard home page no longer blocks on a full walk of object storage.** `getMinioStats` listed *every key in every bucket* — recursively, unbounded — and `getDashboardStats` awaited it before the page rendered a single card. On a small install that is a few hundred milliseconds; on one with 10k folders × 10k files it is tens of millions of keys and the home page simply never paints, which is why the freeze looked dashboard-wide rather than confined to Storage. The walk is now bounded, cached, and off the critical path: it stops after `STORAGE_STATS_MAX_OBJECTS` keys (default 50,000) and reports the result as a floor ("at least 50,000 objects · 12.4 GB+") rather than pretending to a total; the result is cached in-process for `STORAGE_STATS_TTL_SECONDS` (default 300) and concurrent callers share one walk instead of each starting their own; and both cards that use it — "Storage buckets" and, for admins, "Object storage" — render inside their own `<Suspense>` boundary, so the rest of the page paints immediately and the numbers stream in behind a "measuring…" placeholder. **Operator note:** these two numbers are now explicitly approximate on large installs. Raise `STORAGE_STATS_MAX_OBJECTS` if you want an exact figure and can afford the scan; lower `STORAGE_STATS_TTL_SECONDS` if you want it fresher. Neither variable needs to be set — the defaults are the intended configuration.
+
+- **Deleting a folder no longer buffers every key beneath it into memory.** `deleteFolder` collected the folder's entire key set into a single array (via the same drain-the-stream pattern) and then handed the whole thing to `removeObjects`. Fine for a handful of files; for a folder holding hundreds of thousands of objects it is an unbounded allocation in the dashboard process before a single object is removed. It now pages through the keys 1,000 at a time — both the S3 listing page size and the `DeleteObjects` batch size — deleting each batch as it arrives. In passing, per-key failures are no longer swallowed: `DeleteObjects` reports them in its *response body* rather than throwing, so a partial failure previously showed up as "Deleted folder (N objects)" with no indication anything had survived. The action now surfaces the first failure as an error and the audit row records how many objects were actually removed before it stopped.
+
+### Added
+
+- **A name filter in the object browser.** Paging 200 entries at a time is only half an answer for a folder with 10,000 of them — nobody is going to press "Load more" fifty times to reach `invoice-9xxx`. The filter box above the listing appends what you type to the S3 prefix, so MinIO does the narrowing and the dashboard still reads one page. It is a **prefix** match ("name starts with…"), not a substring one, and deliberately so: substring matching against S3 requires walking every key in the level, which is precisely the behaviour this release removes. It is a plain GET form in the same style as the audit-log filters — the URL carries `?q=`, so a filtered view is linkable and survives a reload. Entering a folder clears the filter.
+
+### Changed
+
+- **Confirm-delete dialogs are mounted on first open rather than on render.** `ConfirmDeleteForm` rendered a complete `<dialog>` — heading, close button, form, message, buttons — for every instance on the page, whether or not anyone opened it. On a listing that is one per row, so the object browser was paying for a few hundred full dialog subtrees' worth of DOM to show a few hundred "Delete" buttons. The trigger now mounts the dialog on its first click and opens it from an effect; once mounted it stays mounted, so focus, backdrop dismissal and form state behave exactly as before. This affects every list page that uses the component, not just Storage.
+
+- **The bucket header no longer claims a folder-wide object count or size.** It used to read "N folders · M objects · X MB" for the current level, which was only ever true because the page had just listed the whole level — the number is not something S3 can report without the walk this release removes. The header now carries the bucket's policy facts (visibility, max upload, MIME allowlist) and the counts moved to a footer under the listing that says what is *loaded*, plus "there are more" while a continuation token remains.
+
+
 ## [2.11.0] - 2026-08-31
 
 ### Added
