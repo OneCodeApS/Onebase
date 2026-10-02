@@ -20,6 +20,10 @@ While the project is on `0.x`, minor version bumps (`0.1 → 0.2`) may include b
 
 - **Advisors** now report a private bucket's unusable `read_check` / `write_check` (as a warning: every end-user request for it is being refused) and, as info, a private bucket with no checks at all.
 
+### Fixed
+
+- **The SQL editor keeps its size when a query runs, and large results scroll inside their own box.** The editor used to snap from 60vh to 260px the moment a result appeared — so a long query became unreadable exactly when you wanted to re-read and re-run it — and the result table grew to the full height of its rows, which put the horizontal scrollbar of a 1,000-row result a thousand rows down the page. The editor now has a drag handle on its bottom edge, starts at 40vh, and remembers the height you give it (per browser, in localStorage). The result sits in a box capped at 75vh that scrolls both ways, so its horizontal scrollbar is always on screen, and the column headers stay pinned while you scroll the rows. Dashboard-only; no migration.
+
 ### Changed
 
 - **The public storage routes answer `forbidden_object` instead of `forbidden_bucket` when an end-user is refused**, since the decision is now per key. The HTTP status (403) is unchanged; clients matching on the error string should accept both.
