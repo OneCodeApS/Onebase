@@ -6,6 +6,7 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { minio, publicObjectUrl, publicSignedObjectUrl } from "@/lib/minio";
 import {
+  checkFunctionProblem,
   FOLDER_PLACEHOLDER,
   forEachKeyBatch,
   getBucketPolicy,
@@ -422,11 +423,24 @@ export async function updateBucketPolicy(formData: FormData) {
     redirect(`/storage/${bucket}?error=${encodeURIComponent("Max MB must be a positive integer ≤ 5000")}`);
   }
 
+  // Optional per-object checks for private buckets (migration 0033). Validated
+  // here so a typo or a SECURITY DEFINER function is refused at save time
+  // instead of silently denying every request later.
+  const readCheck = String(formData.get("read_check") ?? "").trim() || null;
+  const writeCheck = String(formData.get("write_check") ?? "").trim() || null;
+  for (const fn of [readCheck, writeCheck]) {
+    if (!fn) continue;
+    const problem = await checkFunctionProblem(fn);
+    if (problem) redirect(`/storage/${bucket}?error=${encodeURIComponent(problem)}`);
+  }
+
   const policy: BucketPolicy = {
     bucket,
     visibility,
     max_upload_mb: maxMb,
     allowed_mime: allowedMime,
+    read_check: readCheck,
+    write_check: writeCheck,
   };
 
   let errMsg: string | null = null;
@@ -458,6 +472,8 @@ export async function updateBucketPolicy(formData: FormData) {
       visibility,
       max_upload_mb: maxMb,
       allowed_mime: allowedMime,
+      read_check: readCheck,
+      write_check: writeCheck,
       ...(errMsg ? { error: errMsg } : {}),
     },
   });

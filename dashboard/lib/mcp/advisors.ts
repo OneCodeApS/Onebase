@@ -1,7 +1,7 @@
 import { pool } from "../db";
 import { listTablesRlsStatus, listTableGrants, listUserSchemas } from "../db-introspect";
 import { listRateLimits } from "../rate-limit";
-import { getBucketPolicy } from "../storage";
+import { checkFunctionProblem, getBucketPolicy } from "../storage";
 import { minio } from "../minio";
 
 // "Onebase doctor" — security and configuration lints tailored to this
@@ -129,6 +129,36 @@ export async function runAdvisors(): Promise<Advisory[]> {
           title: `Bucket "${b.name}" is public`,
           detail:
             "Anonymous reads are allowed on every object, and any authenticated end-user can sign upload URLs for it.",
+        });
+        continue;
+      }
+      // Private bucket: its read/write checks are the only thing standing
+      // between an end-user and the objects, so a broken one is a real finding.
+      for (const [mode, fn] of [
+        ["read", policy.read_check],
+        ["write", policy.write_check],
+      ] as const) {
+        if (!fn) continue;
+        const problem = await checkFunctionProblem(fn);
+        if (problem) {
+          push({
+            level: "warn",
+            category: "storage",
+            title: `Bucket "${b.name}" has an unusable ${mode}_check`,
+            detail: `${problem}. Until it is fixed, every end-user ${mode === "read" ? "download" : "upload"} for this bucket is refused.`,
+            remediation: `Fix public.${fn}, or clear ${mode}_check in the bucket settings.`,
+          });
+        }
+      }
+      if (!policy.read_check && !policy.write_check) {
+        push({
+          level: "info",
+          category: "storage",
+          title: `Bucket "${b.name}" is private with no read/write check`,
+          detail:
+            "End-users cannot sign or upload for it at all; only service_role can. That is correct if a backend mediates every access, otherwise app users will get 403s.",
+          remediation:
+            "Set read_check / write_check to a SECURITY INVOKER function that decides access through your RLS.",
         });
       }
     }

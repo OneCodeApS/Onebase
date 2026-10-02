@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { verifyJwtSignature } from "@/lib/auth-jwt";
 import { publicSignedObjectUrl } from "@/lib/minio";
-import { canSignForBucket } from "@/lib/storage";
+import { authorizeKeys } from "@/lib/storage";
 import { corsPreflight, withCors } from "@/lib/cors";
 
 const METHODS = ["POST"] as const;
@@ -17,13 +17,14 @@ type Body = { items: Item[]; expires_in?: number };
 // Mints up to MAX_BATCH SigV4-signed GET URLs in one round-trip. Use for
 // galleries / grids that would otherwise issue N sequential POSTs.
 async function handler(req: NextRequest) {
-  const claims = await readJwt(req);
-  if (!claims) {
+  const jwt = await readJwt(req);
+  if (!jwt) {
     return NextResponse.json(
       { error: "missing_or_invalid_token" },
       { status: 401 },
     );
   }
+  const { claims, raw } = jwt;
   if (claims.role !== "authenticated" && claims.role !== "service_role") {
     return NextResponse.json({ error: "forbidden_role" }, { status: 403 });
   }
@@ -47,14 +48,23 @@ async function handler(req: NextRequest) {
   const ttl = clampTtl(body.expires_in ?? DEFAULT_SIGN_TTL);
   const expiresAt = new Date(Date.now() + ttl * 1000).toISOString();
 
-  // Object-level authorization, resolved once per distinct bucket: service_role
-  // anywhere; authenticated only on public buckets. Disallowed items come back
-  // as per-item errors (same shape as a presign failure), so one forbidden
-  // bucket doesn't fail the whole batch.
-  const allowed = new Map<string, boolean>();
+  // Object-level authorization, resolved once per distinct bucket with every key
+  // asked for in it — one check call per bucket, not one per item. Disallowed
+  // items come back as per-item errors (same shape as a presign failure), so
+  // one forbidden object doesn't fail the whole batch.
+  const byBucket = new Map<string, string[]>();
+  for (const it of body.items) {
+    const list = byBucket.get(it.bucket) ?? [];
+    list.push(String(it.key));
+    byBucket.set(it.bucket, list);
+  }
+  const allowed = new Map<string, Set<string>>();
   await Promise.all(
-    [...new Set(body.items.map((it) => it.bucket))].map(async (b) =>
-      allowed.set(b, await canSignForBucket(claims.role, b)),
+    [...byBucket].map(async ([bucket, keys]) =>
+      allowed.set(
+        bucket,
+        await authorizeKeys({ role: claims.role as string, token: raw, bucket, keys, mode: "read" }),
+      ),
     ),
   );
 
@@ -62,8 +72,8 @@ async function handler(req: NextRequest) {
   // serialize them sequentially.
   const items = await Promise.all(
     body.items.map(async (it) => {
-      if (!allowed.get(it.bucket)) {
-        return { bucket: it.bucket, key: it.key, error: "forbidden_bucket" };
+      if (!allowed.get(it.bucket)?.has(String(it.key))) {
+        return { bucket: it.bucket, key: it.key, error: "forbidden_object" };
       }
       try {
         const url = await publicSignedObjectUrl("GET", it.bucket, it.key, ttl);
@@ -93,7 +103,7 @@ async function readJwt(req: NextRequest) {
   const raw = m?.[1] ?? apikey;
   if (!raw) return null;
   try {
-    return await verifyJwtSignature(raw);
+    return { claims: await verifyJwtSignature(raw), raw };
   } catch {
     return null;
   }

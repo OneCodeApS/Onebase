@@ -9,6 +9,11 @@ export type BucketPolicy = {
   max_upload_mb: number;
   // null = all MIME types allowed.
   allowed_mime: string[] | null;
+  // Private buckets only: name of a public.<fn>(p_bucket text, p_keys text[])
+  // returns setof text, called as the end-user to authorize reads / uploads.
+  // null = service_role only (the behaviour before migration 0033).
+  read_check: string | null;
+  write_check: string | null;
 };
 
 // Defaults applied to buckets that don't yet have a policy row.
@@ -16,12 +21,19 @@ export const DEFAULT_POLICY = {
   visibility: "private" as Visibility,
   max_upload_mb: 25,
   allowed_mime: null as string[] | null,
+  read_check: null as string | null,
+  write_check: null as string | null,
 };
 
 export async function getBucketPolicy(bucket: string): Promise<BucketPolicy> {
+  // The check columns are read through to_jsonb so an install that has not yet
+  // applied migration 0033 keeps working: the keys are simply absent, which is
+  // the same as "no check" — private stays service_role only.
   const { rows } = await pool().query<BucketPolicy>(
-    `SELECT bucket, visibility, max_upload_mb, allowed_mime
-       FROM _dashboard.bucket_policies
+    `SELECT bucket, visibility, max_upload_mb, allowed_mime,
+            to_jsonb(p) ->> 'read_check'  AS read_check,
+            to_jsonb(p) ->> 'write_check' AS write_check
+       FROM _dashboard.bucket_policies p
       WHERE bucket = $1`,
     [bucket],
   );
@@ -29,17 +41,13 @@ export async function getBucketPolicy(bucket: string): Promise<BucketPolicy> {
   return { bucket, ...DEFAULT_POLICY };
 }
 
-// Authorization for the PUBLIC storage signing/upload routes (the external API
-// surface, not the dashboard's own UI). `service_role` (server-side, trusted)
-// may sign for any bucket; an `authenticated` end-user may only sign for
-// buckets explicitly marked `public`. Private buckets are reached only via your
-// own backend, which holds `service_role` and does its own per-user check —
-// this stops any logged-in user from signing URLs for arbitrary objects in
-// private buckets (object-level authorization bypass). Note: any authenticated
-// user can still read/overwrite objects in a *public* bucket (that's what
-// "public" means); use private buckets + backend-mediated signing for
-// per-user-controlled access. Per-object ownership (e.g. key-prefix = user id)
-// can layer on top later — see TODOS.md "per-bucket ACL beyond visibility".
+// Bucket-level answer only: `service_role` may sign for any bucket; an
+// `authenticated` end-user only for buckets marked `public`. The public sign /
+// sign-batch / upload routes no longer call this — they use authorizeKeys
+// below, which adds per-object checks for private buckets (migration 0033).
+// Kept for callers that only need the bucket-level rule. Note: any
+// authenticated user can still read/overwrite objects in a *public* bucket
+// (that's what "public" means).
 export async function canSignForBucket(
   role: string | undefined,
   bucket: string,
@@ -54,14 +62,38 @@ export async function setBucketPolicy(
   policy: BucketPolicy,
   updatedBy: string | null,
 ): Promise<void> {
+  const hasChecks = policy.read_check !== null || policy.write_check !== null;
+  // Without checks the statement is the pre-0033 one, so saving visibility or
+  // size limits still works on an install that has not applied the migration.
+  // With checks it needs the columns — and the error then says so plainly.
+  if (!hasChecks && !(await hasCheckColumns())) {
+    await pool().query(
+      `INSERT INTO _dashboard.bucket_policies
+         (bucket, visibility, max_upload_mb, allowed_mime, updated_by, updated_at)
+       VALUES ($1, $2, $3, $4, $5, now())
+       ON CONFLICT (bucket) DO UPDATE
+         SET visibility    = EXCLUDED.visibility,
+             max_upload_mb = EXCLUDED.max_upload_mb,
+             allowed_mime  = EXCLUDED.allowed_mime,
+             updated_by    = EXCLUDED.updated_by,
+             updated_at    = now()`,
+      [policy.bucket, policy.visibility, policy.max_upload_mb, policy.allowed_mime, updatedBy],
+    );
+    return;
+  }
+  if (!(await hasCheckColumns())) {
+    throw new Error("Apply migration 0033_bucket_policy_checks.sql before setting read/write checks");
+  }
   await pool().query(
     `INSERT INTO _dashboard.bucket_policies
-       (bucket, visibility, max_upload_mb, allowed_mime, updated_by, updated_at)
-     VALUES ($1, $2, $3, $4, $5, now())
+       (bucket, visibility, max_upload_mb, allowed_mime, read_check, write_check, updated_by, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, now())
      ON CONFLICT (bucket) DO UPDATE
        SET visibility    = EXCLUDED.visibility,
            max_upload_mb = EXCLUDED.max_upload_mb,
            allowed_mime  = EXCLUDED.allowed_mime,
+           read_check    = EXCLUDED.read_check,
+           write_check   = EXCLUDED.write_check,
            updated_by    = EXCLUDED.updated_by,
            updated_at    = now()`,
     [
@@ -69,9 +101,195 @@ export async function setBucketPolicy(
       policy.visibility,
       policy.max_upload_mb,
       policy.allowed_mime,
+      policy.read_check,
+      policy.write_check,
       updatedBy,
     ],
   );
+}
+
+async function hasCheckColumns(): Promise<boolean> {
+  const { rows } = await pool().query<{ n: number }>(
+    `SELECT count(*)::int AS n
+       FROM information_schema.columns
+      WHERE table_schema = '_dashboard' AND table_name = 'bucket_policies'
+        AND column_name IN ('read_check', 'write_check')`,
+  );
+  return (rows[0]?.n ?? 0) === 2;
+}
+
+// ─── Per-object authorization for private buckets (migration 0033) ──────────
+//
+// A private bucket may name a read_check / write_check: a SQL function in the
+// public schema with the signature (p_bucket text, p_keys text[]) returns
+// setof text. Before signing a URL for an authenticated end-user, the dashboard
+// calls it through PostgREST WITH THAT USER'S JWT, so it runs as the user and
+// every RLS policy on the tables it reads applies. It returns the subset of the
+// requested keys the user may access. The app's own RLS is therefore the single
+// source of truth for who may see a file — there is no second rule set to keep
+// in step with it.
+//
+// Everything fails closed: an unknown or invalid function, a SECURITY DEFINER
+// function (it would bypass the very RLS this relies on), a timeout, a non-2xx
+// answer, or an answer containing keys that were never asked for — all mean
+// "nobody gets anything".
+
+export type CheckMode = "read" | "write";
+
+export const CHECK_FUNCTION_NAME = /^[a-z_][a-z0-9_]{0,62}$/;
+
+const CHECK_TIMEOUT_MS = 5000;
+const CHECK_VALIDATION_TTL_MS = 30_000;
+const MAX_KEY_LENGTH = 1024;
+
+// Object keys handed to a check function must already be in canonical form,
+// otherwise "registrering/<id>/../<other-id>/x.jpg" would be authorized on the
+// first id and served for the second. Returns null for anything that is not a
+// plain, relative, slash-separated key — callers treat that as denied.
+export function normalizeObjectKey(key: string): string | null {
+  if (typeof key !== "string") return null;
+  if (key.length === 0 || key.length > MAX_KEY_LENGTH) return null;
+  if (key.startsWith("/") || key.endsWith("/")) return null;
+  if (key.includes("//") || key.includes("\\")) return null;
+  // eslint-disable-next-line no-control-regex
+  if (/[\x00-\x1f\x7f]/.test(key)) return null;
+  const segments = key.split("/");
+  if (segments.some((s) => s === "." || s === "..")) return null;
+  return key;
+}
+
+// Why a function cannot be used as a check, or null when it can. Used both
+// when an operator saves a policy and (cached briefly) before every decision,
+// so a function altered to SECURITY DEFINER after it was configured stops
+// being trusted on its own.
+export async function checkFunctionProblem(name: string): Promise<string | null> {
+  if (!CHECK_FUNCTION_NAME.test(name)) {
+    return `"${name}" is not a valid function name (lowercase letters, digits, underscore)`;
+  }
+  const { rows } = await pool().query<{
+    prosecdef: boolean;
+    proretset: boolean;
+    rettype: string;
+    args: string;
+  }>(
+    `SELECT p.prosecdef, p.proretset,
+            format_type(p.prorettype, NULL) AS rettype,
+            pg_get_function_identity_arguments(p.oid) AS args
+       FROM pg_proc p
+       JOIN pg_namespace n ON n.oid = p.pronamespace
+      WHERE n.nspname = 'public' AND p.proname = $1`,
+    [name],
+  );
+  if (rows.length === 0) return `public.${name} does not exist`;
+  if (rows.length > 1) return `public.${name} is overloaded; a check function must have exactly one signature`;
+  const fn = rows[0];
+  if (fn.args.replace(/\s+/g, " ").trim() !== "p_bucket text, p_keys text[]") {
+    return `public.${name} must take (p_bucket text, p_keys text[]); it takes (${fn.args})`;
+  }
+  if (!fn.proretset || fn.rettype !== "text") {
+    return `public.${name} must return setof text`;
+  }
+  if (fn.prosecdef) {
+    return `public.${name} is SECURITY DEFINER, which would bypass RLS; it must be SECURITY INVOKER`;
+  }
+  return null;
+}
+
+const validationCache = new Map<string, { problem: string | null; at: number }>();
+
+async function cachedCheckProblem(name: string): Promise<string | null> {
+  const hit = validationCache.get(name);
+  if (hit && Date.now() - hit.at < CHECK_VALIDATION_TTL_MS) return hit.problem;
+  const problem = await checkFunctionProblem(name);
+  validationCache.set(name, { problem, at: Date.now() });
+  return problem;
+}
+
+// Calls the check through PostgREST as the end-user. Returns the keys it
+// allowed; any failure is an empty set.
+async function runCheck(
+  fn: string,
+  token: string,
+  bucket: string,
+  keys: string[],
+): Promise<Set<string>> {
+  const base = (process.env.POSTGREST_INTERNAL_URL ?? "http://postgrest:3000").replace(/\/+$/, "");
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), CHECK_TIMEOUT_MS);
+  try {
+    const res = await fetch(`${base}/rpc/${fn}`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify({ p_bucket: bucket, p_keys: keys }),
+      signal: ctrl.signal,
+      cache: "no-store",
+    });
+    if (!res.ok) {
+      console.error(`storage check ${fn} answered ${res.status}: ${(await res.text()).slice(0, 300)}`);
+      return new Set();
+    }
+    const body: unknown = await res.json();
+    if (!Array.isArray(body)) return new Set();
+    const asked = new Set(keys);
+    const allowed = new Set<string>();
+    for (const item of body) {
+      // PostgREST returns setof text as a plain array of strings; tolerate the
+      // object form ({ <fn>: "key" }) some versions produce.
+      const value =
+        typeof item === "string"
+          ? item
+          : item && typeof item === "object"
+            ? (Object.values(item as Record<string, unknown>)[0] as unknown)
+            : null;
+      if (typeof value !== "string") continue;
+      // A key that was never asked about means the function is not doing what
+      // it is supposed to. Do not trust any of its answer.
+      if (!asked.has(value)) {
+        console.error(`storage check ${fn} returned a key it was not asked about; denying all`);
+        return new Set();
+      }
+      allowed.add(value);
+    }
+    return allowed;
+  } catch (e) {
+    console.error(`storage check ${fn} failed: ${(e as Error).message}`);
+    return new Set();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// The decision used by the public sign / sign-batch / upload routes. Returns
+// the subset of `keys` the caller may access in `bucket`.
+//   service_role  → all of them (trusted backend)
+//   anon / other  → none
+//   authenticated → public bucket: all (unchanged); private bucket: whatever
+//                   the bucket's read_check / write_check allows, else none.
+export async function authorizeKeys(args: {
+  role: string | undefined;
+  token: string;
+  bucket: string;
+  keys: string[];
+  mode: CheckMode;
+}): Promise<Set<string>> {
+  const { role, token, bucket, keys, mode } = args;
+  if (role === "service_role") return new Set(keys);
+  if (role !== "authenticated") return new Set();
+
+  const policy = await getBucketPolicy(bucket);
+  if (policy.visibility === "public") return new Set(keys);
+
+  const fn = mode === "read" ? policy.read_check : policy.write_check;
+  if (!fn) return new Set();
+  if (await cachedCheckProblem(fn)) return new Set();
+
+  const valid = [...new Set(keys.map(normalizeObjectKey).filter((k): k is string => k !== null))];
+  if (valid.length === 0) return new Set();
+  return runCheck(fn, token, bucket, valid);
 }
 
 // Checks if a given MIME matches the whitelist. Supports wildcards like

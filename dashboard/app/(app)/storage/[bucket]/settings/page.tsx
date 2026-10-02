@@ -126,6 +126,46 @@ export default async function BucketSettingsPage({
             />
           </div>
 
+          <div>
+            <label htmlFor="read_check" className="block text-sm font-medium text-neutral-200">
+              Read check (private buckets)
+            </label>
+            <p className="mt-0.5 text-xs text-neutral-500">
+              Name of a{" "}
+              <span className="font-mono">public.fn(p_bucket text, p_keys text[]) returns setof text</span>.
+              Before signing a download URL for an end-user, the dashboard calls it through
+              PostgREST with that user&apos;s token, so it runs as the user and your RLS
+              decides which keys come back. Must not be SECURITY DEFINER. Leave empty to keep
+              the bucket service_role only.
+            </p>
+            <input
+              id="read_check"
+              type="text"
+              name="read_check"
+              defaultValue={policy.read_check ?? ""}
+              placeholder="storage_can_read_my_bucket"
+              className="mt-2 w-full rounded border border-neutral-700 bg-neutral-950 px-2 py-1 font-mono text-sm"
+            />
+          </div>
+
+          <div>
+            <label htmlFor="write_check" className="block text-sm font-medium text-neutral-200">
+              Write check (private buckets)
+            </label>
+            <p className="mt-0.5 text-xs text-neutral-500">
+              Same contract, consulted before an upload URL is issued. Leave empty to keep
+              uploads service_role only.
+            </p>
+            <input
+              id="write_check"
+              type="text"
+              name="write_check"
+              defaultValue={policy.write_check ?? ""}
+              placeholder="storage_can_write_my_bucket"
+              className="mt-2 w-full rounded border border-neutral-700 bg-neutral-950 px-2 py-1 font-mono text-sm"
+            />
+          </div>
+
           <div className="flex justify-end">
             <button
               type="submit"

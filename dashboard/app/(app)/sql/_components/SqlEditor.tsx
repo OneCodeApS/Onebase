@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useRef, useState } from "react";
+import { useActionState, useEffect, useRef, useState } from "react";
 import CodeMirror from "@uiw/react-codemirror";
 import { sql, PostgreSQL } from "@codemirror/lang-sql";
 import { keymap } from "@codemirror/view";
@@ -239,6 +239,10 @@ WHERE created_at > now() - interval '7 days';`,
   },
 ];
 
+const EDITOR_HEIGHT_KEY = "onebase.sql.editorHeight";
+const DEFAULT_EDITOR_HEIGHT = "40vh";
+const MIN_EDITOR_HEIGHT = 120;
+
 function renderCell(v: unknown): string {
   if (v === null || v === undefined) return "—";
   if (v instanceof Date) return v.toISOString();
@@ -411,12 +415,20 @@ function Result({ result }: { result: QueryResult }) {
       </div>
 
       {result.fields.length > 0 && result.rows.length > 0 ? (
-        <Card className="mt-3 overflow-x-auto">
+        // The result scrolls inside its own box, both ways, capped at the height
+        // of the viewport. Left to grow with the row count, a 1,000-row result
+        // put the horizontal scrollbar a thousand rows down the page.
+        <Card className="mt-3 max-h-[75vh] overflow-auto">
           <table className="w-full border-collapse text-sm">
             <thead>
-              <tr className="border-b border-neutral-700 bg-neutral-800/60 text-left text-neutral-400">
+              <tr className="border-b border-neutral-700 text-left text-neutral-400">
                 {result.fields.map((f) => (
-                  <th key={f} className="px-3 py-2 font-mono font-normal text-neutral-100">
+                  // Sticky per cell (a sticky <tr> is not honoured everywhere),
+                  // with an opaque background so rows don't show through.
+                  <th
+                    key={f}
+                    className="sticky top-0 z-10 bg-neutral-800 px-3 py-2 font-mono font-normal text-neutral-100 shadow-[inset_0_-1px_0_0_rgb(64_64_64)]"
+                  >
                     {f}
                   </th>
                 ))}
@@ -506,6 +518,43 @@ export function SqlEditor({ role }: { role: UserRole }) {
   // action completes — the user wants to see / edit / re-run their last query.
   const [sqlText, setSqlText] = useState("");
 
+  // Editor height: the user's own, dragged with the bottom edge and remembered
+  // per browser. It used to snap to 260px the moment a result appeared, which
+  // made a long query unreadable exactly when it was worth re-reading.
+  const editorBoxRef = useRef<HTMLDivElement | null>(null);
+  const [editorHeight, setEditorHeight] = useState<string>(DEFAULT_EDITOR_HEIGHT);
+
+  useEffect(() => {
+    // Read after mount so server and client render the same first frame.
+    try {
+      const saved = Number(window.localStorage.getItem(EDITOR_HEIGHT_KEY));
+      if (Number.isFinite(saved) && saved >= MIN_EDITOR_HEIGHT) setEditorHeight(`${saved}px`);
+    } catch {
+      // storage blocked (private mode, policy): keep the default
+    }
+  }, []);
+
+  useEffect(() => {
+    const box = editorBoxRef.current;
+    if (!box || typeof ResizeObserver === "undefined") return;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const observer = new ResizeObserver(() => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        try {
+          window.localStorage.setItem(EDITOR_HEIGHT_KEY, String(Math.round(box.offsetHeight)));
+        } catch {
+          // storage blocked: the height still holds for this page view
+        }
+      }, 300);
+    });
+    observer.observe(box);
+    return () => {
+      observer.disconnect();
+      if (timer) clearTimeout(timer);
+    };
+  }, []);
+
   // Ctrl/Cmd+Enter submits the form from inside CodeMirror.
   const submitKeymap = Prec.highest(
     keymap.of([
@@ -529,9 +578,13 @@ export function SqlEditor({ role }: { role: UserRole }) {
         {/* CodeMirror isn't a native form input, so we mirror its value into a
             hidden input so the server action's FormData picks it up. */}
         <input type="hidden" name="sql" value={sqlText} />
-        <div className="overflow-hidden rounded border border-neutral-700">
-          {/* Tall while composing; shrinks once a result is showing so the
-              output has room below. */}
+        {/* resize-y gives the box a drag handle on its bottom edge; the browser
+            writes the new height inline, and the observer above remembers it. */}
+        <div
+          ref={editorBoxRef}
+          className="resize-y overflow-hidden rounded border border-neutral-700"
+          style={{ height: editorHeight, minHeight: MIN_EDITOR_HEIGHT }}
+        >
           <CodeMirror
             value={sqlText}
             onChange={setSqlText}
@@ -549,7 +602,8 @@ export function SqlEditor({ role }: { role: UserRole }) {
                 ? "SELECT * FROM public.todos;\n\n(Ctrl+Enter to run — read-only users can run SELECT only)"
                 : "SELECT * FROM public.todos;\n\n(Ctrl+Enter to run)"
             }
-            height={result ? "260px" : "60vh"}
+            height="100%"
+            style={{ height: "100%" }}
           />
         </div>
         <div className="mt-2 flex items-center justify-between">

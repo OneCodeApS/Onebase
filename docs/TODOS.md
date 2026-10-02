@@ -44,10 +44,8 @@ Single-PUT presigned URLs work up to S3's per-object limit but can't resume on c
   - **S3 multipart via presigned URLs** — `POST /storage/v1/object/multipart/<bucket>/<key>` returns `upload_id` + N presigned part URLs. Client PUTs ~5 MB chunks in parallel; failed parts retried individually; `.../complete` tells MinIO to assemble. MinIO supports this natively.
   - **TUS protocol** — Supabase's path. Server runs `tus-node-server`, client uses `tus-js-client`. The chunks would need to go through Node (TUS isn't an S3 protocol), so this gives up the "no Node in byte path" property — only worth it if the upload-resume UX matters more than the bandwidth cost.
 
-### Storage: per-bucket ACL beyond visibility
-The dashboard issues SigV4 URLs to any caller with an `authenticated` or `service_role` JWT — no per-bucket or per-object check beyond visibility. Once buckets need ownership-aware reads, add either:
-  - A `_dashboard.bucket_acl` table (bucket × role × perm), checked inside the sign / upload route handlers before minting the URL.
-  - Or a `_dashboard.storage_objects` table mirroring object → owner, with RLS policies against it (Supabase pattern; tracks objects in Postgres for free, but doubles writes per upload via MinIO bucket-notification events).
+### ~~Storage: per-bucket ACL beyond visibility~~ — done in 2.13.0
+Solved without either of the tables first sketched here: a private bucket names a `read_check` / `write_check` SQL function that the dashboard calls through PostgREST as the end-user, so the app's existing RLS decides per object (migration 0033, `lib/storage.ts:authorizeKeys`). A `_dashboard.storage_objects` mirror is still the route if per-object metadata (uploader, size) is ever needed in SQL.
 
 ### Storage: fetch-time audit via MinIO notifications
 URL issuance is audited via the server actions on the bucket UI, but the new public proxy routes (`/sign`, `/sign-batch`, `/upload`) write no audit rows yet — and MinIO data-plane fetches never touch the dashboard, so they're invisible to `_dashboard.audit_log`. Two fixes:
