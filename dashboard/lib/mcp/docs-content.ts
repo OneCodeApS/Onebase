@@ -67,7 +67,14 @@ Authorization is the JWT's role + Postgres RLS policies. After schema changes (n
 - POST /storage/v1/object/sign-batch             → many at once
 - GET  /storage/v1/object/<bucket>/<key>         → direct fetch (public buckets only)
 
-Bucket policy (visibility public/private, max upload MB, MIME allowlist) is set per bucket. service_role may sign for any bucket; authenticated users only for public buckets — private buckets are signed by your backend after its own authorization check.`,
+Bucket policy (visibility public/private, max upload MB, MIME allowlist, read_check, write_check) is set per bucket. service_role may sign for any bucket. Authenticated users may sign for public buckets, and for a private bucket only through its read_check (downloads) / write_check (uploads).
+
+A check is the name of a SQL function in the public schema:
+
+  create function public.storage_can_read_<bucket>(p_bucket text, p_keys text[])
+  returns setof text language sql stable security invoker as $$ ... $$;
+
+The dashboard calls it through PostgREST with the end-user's own JWT, so it runs as that user and every RLS policy on the tables it reads applies; it returns the keys the user may access. Typical body: derive the owning row's id from the key prefix and return the key only if the user can SELECT that row. Keys are normalised first (no "..", "//", leading "/", control characters). Everything fails closed: missing / overloaded / SECURITY DEFINER function, timeout, error, or a returned key that was not asked for all deny. With no check, a private bucket is service_role only.`,
   },
   {
     slug: "realtime",

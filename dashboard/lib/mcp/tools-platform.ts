@@ -9,7 +9,13 @@ import {
   validateFunctionCode,
 } from "../functions";
 import { listCronJobs, notifyCronReload, upsertCronJob, validateCronExpression } from "../cron";
-import { getBucketPolicy, publicReadPolicy, setBucketPolicy, type Visibility } from "../storage";
+import {
+  checkFunctionProblem,
+  getBucketPolicy,
+  publicReadPolicy,
+  setBucketPolicy,
+  type Visibility,
+} from "../storage";
 import { minio } from "../minio";
 import { confirmationRequest, verifyConfirmToken } from "./confirm";
 import { wrapUntrusted } from "./untrusted";
@@ -220,6 +226,8 @@ export const platformTools: ToolDef[] = [
           visibility: policy.visibility,
           max_upload_mb: policy.max_upload_mb,
           allowed_mime: policy.allowed_mime,
+          read_check: policy.read_check,
+          write_check: policy.write_check,
         });
       }
       return { text: JSON.stringify(out, null, 1) };
@@ -229,7 +237,7 @@ export const platformTools: ToolDef[] = [
   {
     name: "set_bucket_policy",
     description:
-      "Update a bucket's policy: visibility (public buckets allow anonymous reads of EVERY object — requires a confirm_token round-trip), max upload size, MIME allowlist. Omitted fields keep their current value.",
+      "Update a bucket's policy: visibility (public buckets allow anonymous reads of EVERY object — requires a confirm_token round-trip), max upload size, MIME allowlist, and for private buckets read_check / write_check: the name of a public.<fn>(p_bucket text, p_keys text[]) returns setof text, SECURITY INVOKER, called as the end-user so RLS decides which keys they may read / upload. Pass an empty string to clear a check. Omitted fields keep their current value.",
     scope: "storage:write",
     readOnly: false,
     inputSchema: {
@@ -242,6 +250,14 @@ export const platformTools: ToolDef[] = [
           type: "array",
           items: { type: "string" },
           description: "MIME allowlist, supports wildcards like image/*. Empty array = allow all.",
+        },
+        read_check: {
+          type: "string",
+          description: "Private buckets: check function consulted before signing a download URL. Empty string clears it.",
+        },
+        write_check: {
+          type: "string",
+          description: "Private buckets: check function consulted before issuing an upload URL. Empty string clears it.",
         },
         confirm_token: { type: "string" },
       },
@@ -266,6 +282,15 @@ export const platformTools: ToolDef[] = [
       const allowedMime = Array.isArray(args.allowed_mime)
         ? args.allowed_mime.map(String).filter(Boolean)
         : current.allowed_mime;
+      const checkArg = (v: unknown, keep: string | null) =>
+        v === undefined ? keep : String(v).trim() || null;
+      const readCheck = checkArg(args.read_check, current.read_check);
+      const writeCheck = checkArg(args.write_check, current.write_check);
+      for (const fn of [readCheck, writeCheck]) {
+        if (!fn) continue;
+        const problem = await checkFunctionProblem(fn);
+        if (problem) return { text: problem, isError: true };
+      }
 
       // Flipping a bucket to public exposes every object anonymously — make
       // the agent surface that to the human first.
@@ -288,6 +313,8 @@ export const platformTools: ToolDef[] = [
           visibility,
           max_upload_mb: maxMb,
           allowed_mime: allowedMime && allowedMime.length > 0 ? allowedMime : null,
+          read_check: readCheck,
+          write_check: writeCheck,
         },
         ctx.auth.userId,
       );

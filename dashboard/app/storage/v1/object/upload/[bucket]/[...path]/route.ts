@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { verifyJwtSignature } from "@/lib/auth-jwt";
 import { publicSignedObjectUrl } from "@/lib/minio";
 import { corsPreflight, withCors } from "@/lib/cors";
-import { canSignForBucket, getBucketPolicy, mimeAllowed } from "@/lib/storage";
+import { authorizeKeys, getBucketPolicy, mimeAllowed } from "@/lib/storage";
 
 const METHODS = ["POST"] as const;
 
@@ -24,13 +24,14 @@ async function handler(
   req: NextRequest,
   ctx: { params: Promise<{ bucket: string; path: string[] }> },
 ) {
-  const claims = await readJwt(req);
-  if (!claims) {
+  const jwt = await readJwt(req);
+  if (!jwt) {
     return NextResponse.json(
       { error: "missing_or_invalid_token" },
       { status: 401 },
     );
   }
+  const { claims, raw } = jwt;
   if (claims.role !== "authenticated" && claims.role !== "service_role") {
     return NextResponse.json({ error: "forbidden_role" }, { status: 403 });
   }
@@ -38,10 +39,18 @@ async function handler(
   const { bucket, path } = await ctx.params;
   const key = path.map(decodeURIComponent).join("/");
 
-  // Object-level authorization: authenticated end-users may only upload to
-  // public buckets; private buckets require service_role (backend-mediated).
-  if (!(await canSignForBucket(claims.role, bucket))) {
-    return NextResponse.json({ error: "forbidden_bucket" }, { status: 403 });
+  // Object-level authorization: service_role anywhere; an authenticated user on
+  // a public bucket, or on a private bucket whose write_check allows this key
+  // (evaluated as the user, so the app's RLS decides). See lib/storage.ts.
+  const allowed = await authorizeKeys({
+    role: claims.role as string,
+    token: raw,
+    bucket,
+    keys: [key],
+    mode: "write",
+  });
+  if (!allowed.has(key)) {
+    return NextResponse.json({ error: "forbidden_object" }, { status: 403 });
   }
 
   let body: { size?: number; content_type?: string };
@@ -109,7 +118,7 @@ async function readJwt(req: NextRequest) {
   const raw = m?.[1] ?? apikey;
   if (!raw) return null;
   try {
-    return await verifyJwtSignature(raw);
+    return { claims: await verifyJwtSignature(raw), raw };
   } catch {
     return null;
   }

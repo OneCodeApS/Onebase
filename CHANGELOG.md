@@ -8,6 +8,30 @@ While the project is on `0.x`, minor version bumps (`0.1 → 0.2`) may include b
 
 ## [Unreleased]
 
+## [2.13.0] - 2026-10-02
+
+### Added
+
+- **Private buckets can now be reached by end-users, authorized per object through the app's own RLS.** Until now an `authenticated` user could sign and upload only in *public* buckets; a private bucket was service_role only, which left an app two bad choices for files such as inspection photos of people's homes: make the bucket public (every object readable by anyone holding the URL, forever, outside RLS and unrevocable) or put a backend in front of every image. A bucket policy can now name a **`read_check`** and a **`write_check`**: a SQL function `public.<fn>(p_bucket text, p_keys text[]) returns setof text`. Before `/storage/v1/object/sign`, `/sign-batch` or `/upload` issues a URL for an end-user on a private bucket, the dashboard calls that function **through PostgREST with the user's own JWT** — so it runs as that user, `auth.uid()` is theirs, and every RLS policy on the tables it reads applies — and signs only the keys it returns. The typical body derives the owning row from the key prefix (`registrering/<id>/…`) and returns the key if the user can `SELECT` that row, which makes the app's existing table RLS the single source of truth for who may see a file. `sign-batch` resolves all keys of a bucket in one call. Set the checks in the bucket's Settings (dialog or page), via MCP `set_bucket_policy`, or listed by `list_buckets`.
+
+  **Everything fails closed.** A missing, overloaded or wrongly-shaped function, a function that is `SECURITY DEFINER` (it would bypass the very RLS this relies on — refused when the policy is saved, and re-checked every 30 s before an answer is trusted, so altering it later stops it working), a timeout (5 s), a non-2xx response, or an answer containing a key that was not asked for — all deny every key. Keys are normalised before the function sees them: a leading `/`, a trailing `/`, `//`, `\`, a `.` or `..` segment, a control character or more than 1024 characters is refused outright, so `<id-I-can-see>/../<id-I-cannot>/x.jpg` can never be authorized on the first id.
+
+- **`npm run test:storage-check`** — an integration test (two users, a throwaway RLS table and check functions) covering allowed and denied signing and uploads, mixed `sign-batch`, `..`/`//` keys, a `SECURITY DEFINER` check, a missing check, a private bucket with no check, and service_role.
+
+- **Advisors** now report a private bucket's unusable `read_check` / `write_check` (as a warning: every end-user request for it is being refused) and, as info, a private bucket with no checks at all.
+
+### Changed
+
+- **The public storage routes answer `forbidden_object` instead of `forbidden_bucket` when an end-user is refused**, since the decision is now per key. The HTTP status (403) is unchanged; clients matching on the error string should accept both.
+
+### Database
+
+- **Migration `0033_bucket_policy_checks.sql`** adds `read_check` and `write_check` (nullable, constrained to a plain lowercase identifier) to `_dashboard.bucket_policies`; mirrored into `postgres/init/05_bucket_policies.sql` for fresh installs. **Upgrade order doesn't matter:** this version reads the columns tolerantly, so before the migration every private bucket simply behaves as before (service_role only), and saving visibility or size limits keeps working; only *setting* a check requires the migration.
+
+  **Operator note:** PostgREST has to know a check function before it can be called. After creating one, reload its schema cache (`NOTIFY pgrst, 'reload schema'`, or MCP `reload_postgrest_schema`; behind PgBouncer with `PGRST_DB_CHANNEL_ENABLED=false`, restart the `postgrest` container). Until then the call 404s and the bucket denies — safe, but it will look like a broken check.
+
+  Not included: an audit row per issued URL. Signing runs once per rendered image, and every `audit()` insert serialises on the chain's advisory lock; that cost needs measuring before it goes on the hot path. The TODO "Storage: fetch-time audit via MinIO notifications" stays open.
+
 ## [2.12.0] - 2026-09-09
 
 ### Fixed
