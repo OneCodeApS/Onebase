@@ -8,6 +8,8 @@ While the project is on `0.x`, minor version bumps (`0.1 → 0.2`) may include b
 
 ## [Unreleased]
 
+## [2.14.0] - 2026-11-02
+
 ### Added
 
 - **Insert rows from the Tables page, for `admin` and `read_write` users.** The Data tab of a real table in a non-system schema now has a "+ Insert row" button beside Refresh. It opens a drawer with one field per column (generated and `GENERATED ALWAYS AS IDENTITY` columns are skipped), marks which are required and which fall back to a default, and posts to a new `insertRow` server action. Blank fields are left out of the `INSERT` so the column default applies; values are sent as query parameters and Postgres casts them, so a bad value surfaces as the usual error banner. `read_write` users execute under the `dashboard_sql_rw` role inside a transaction, exactly as the SQL editor does, so the database, not the UI, is what stops them from doing anything but DML. The action re-checks role, schema, and that the target is a table (not a view) regardless of what the form sent, and audits as `table.insert_row` with the column names (never the values). `read_only` users see no button and the action rejects them. Known limitation: blank means "default", so an empty string or an explicit NULL over a non-null default can't be entered here; use the SQL editor for that. No migration: `dashboard_sql_rw` exists since 0020.
