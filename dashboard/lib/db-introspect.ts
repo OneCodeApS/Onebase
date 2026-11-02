@@ -452,3 +452,23 @@ export async function listEnums(schema: string): Promise<EnumType[]> {
   );
   return rows;
 }
+
+// The table's single-column primary key, or null when it has none or a
+// composite one. Used by the table page for keyset paging and by the row
+// actions to address exactly one row. SAFE_IDENT-checked here because callers
+// interpolate the (quoted) name into SQL.
+export async function loadPrimaryKeyColumn(schema: string, table: string): Promise<string | null> {
+  const { rows } = await pool().query<{ attname: string }>(
+    `SELECT a.attname AS attname
+       FROM pg_index i
+       JOIN pg_class c       ON c.oid = i.indrelid
+       JOIN pg_namespace n   ON n.oid = c.relnamespace
+       JOIN pg_attribute a   ON a.attrelid = c.oid AND a.attnum = ANY (i.indkey)
+      WHERE n.nspname = $1 AND c.relname = $2 AND i.indisprimary`,
+    [schema, table],
+  );
+  // Exactly one row = single-column PK. Zero = no PK, >1 = composite.
+  if (rows.length !== 1) return null;
+  const col = rows[0].attname;
+  return SAFE_IDENT.test(col) ? col : null;
+}
