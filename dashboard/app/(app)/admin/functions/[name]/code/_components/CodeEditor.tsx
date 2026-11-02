@@ -30,11 +30,12 @@ export function CodeEditor({
   );
 
   return (
-    <form ref={formRef} action={saveCode}>
+    <form ref={formRef} action={saveCode} className="flex min-h-0 flex-1 flex-col">
       <input type="hidden" name="name" value={name} />
       <input type="hidden" name="code" value={code} />
 
-      <div className="overflow-hidden rounded border border-neutral-700">
+      {/* shortcut: the max-h assumes ~24rem of page chrome (header, title, tabs, Save row, padding) so the Save row stays on screen; re-measure if the layout above changes height. */}
+      <div className="min-h-[320px] max-h-[calc(100vh-24rem)] flex-1 overflow-hidden rounded border border-neutral-700">
         <CodeMirror
           value={code}
           onChange={setCode}
@@ -47,7 +48,8 @@ export function CodeEditor({
             highlightActiveLineGutter: true,
             autocompletion: false,
           }}
-          height="520px"
+          height="100%"
+          style={{ height: "100%" }}
         />
       </div>
 

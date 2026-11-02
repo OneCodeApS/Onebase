@@ -20,7 +20,7 @@ export default async function FunctionDetailLayout({
   const isAdmin = session.role === "admin";
 
   return (
-    <main className="px-6 py-10">
+    <main className="flex min-h-full flex-col px-6 py-10">
       <Link
         href="/admin/functions"
         className="text-sm text-neutral-400 hover:text-neutral-100"
@@ -47,7 +47,7 @@ export default async function FunctionDetailLayout({
         <FunctionTabs name={name} isAdmin={isAdmin} />
       </div>
 
-      <div className="mt-6">{children}</div>
+      <div className="mt-6 flex min-h-0 flex-1 flex-col">{children}</div>
     </main>
   );
 }

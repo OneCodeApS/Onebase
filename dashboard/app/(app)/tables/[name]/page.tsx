@@ -1,7 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { pool } from "@/lib/db";
-import { Card } from "../../_components/Card";
 import { RefreshButton } from "../../_components/RefreshButton";
 import {
   SchemaPanel,
@@ -11,7 +10,10 @@ import {
 } from "../_components/SchemaPanel";
 import { RowFilter } from "../_components/RowFilter";
 import { AddColumnDrawer } from "../_components/AddColumnDrawer";
+import { InsertRowDrawer } from "../_components/InsertRowDrawer";
+import { DataTable, type DataRow } from "../_components/DataTable";
 import { getSession } from "@/lib/session";
+import { loadPrimaryKeyColumn } from "@/lib/db-introspect";
 
 const PAGE_SIZE = 50;
 
@@ -26,11 +28,17 @@ const DEFAULT_SCHEMA = "public";
 type Column = {
   column_name: string;
   data_type: string;
+  // Feed the Insert-row drawer: which fields are optional and which to omit.
+  is_nullable: string;
+  column_default: string | null;
+  is_identity: string;
+  identity_generation: string | null;
+  is_generated: string;
 };
 
 async function loadColumns(schema: string, table: string): Promise<Column[]> {
   const { rows } = await pool().query<Column>(
-    `SELECT column_name, data_type
+    `SELECT column_name, data_type, is_nullable, column_default, is_identity, identity_generation, is_generated
        FROM information_schema.columns
       WHERE table_schema = $1 AND table_name = $2
       ORDER BY ordinal_position`,
@@ -75,23 +83,6 @@ async function loadRelInfo(
 // The single-column primary key, or null when the table has no PK or a
 // composite one. Keyset pagination needs one unique, ordered column to seek on;
 // anything else falls back to OFFSET paging.
-async function loadPrimaryKeyColumn(schema: string, table: string): Promise<string | null> {
-  const { rows } = await pool().query<{ attname: string }>(
-    `SELECT a.attname AS attname
-       FROM pg_index i
-       JOIN pg_class c       ON c.oid = i.indrelid
-       JOIN pg_namespace n   ON n.oid = c.relnamespace
-       JOIN pg_attribute a   ON a.attrelid = c.oid AND a.attnum = ANY (i.indkey)
-      WHERE n.nspname = $1 AND c.relname = $2 AND i.indisprimary`,
-    [schema, table],
-  );
-  // Exactly one row = single-column PK. Zero = no PK, >1 = composite.
-  if (rows.length !== 1) return null;
-  const col = rows[0].attname;
-  // Belt-and-suspenders before we interpolate the name into a query.
-  return SAFE_IDENT.test(col) ? col : null;
-}
-
 const KIND_LABEL: Record<string, string> = {
   v: "View",
   m: "Materialized view",
@@ -259,6 +250,18 @@ async function loadConstraints(schema: string, table: string): Promise<SchemaCon
     [schema, table],
   );
   return rows;
+}
+
+// The editable text form of a value for the Edit drawer. null = SQL NULL.
+// undefined = no safe round-trip as a single text field (arrays would need the
+// Postgres literal syntax, bytea a hex encoding), so the drawer locks it and
+// points at the SQL editor. Objects (jsonb) and Dates round-trip via JSON / ISO.
+function editValue(v: unknown): string | null | undefined {
+  if (v === null || v === undefined) return null;
+  if (v instanceof Date) return v.toISOString();
+  if (Array.isArray(v) || Buffer.isBuffer(v)) return undefined;
+  if (typeof v === "object") return JSON.stringify(v);
+  return String(v);
 }
 
 function renderCell(v: unknown): string {
@@ -436,6 +439,13 @@ export default async function TableRowsPage({
   // The Data-tab "+" column (Add column) — admins only, real tables, never
   // system schemas. addColumn re-checks all of this server-side regardless.
   const canAddColumn = session.role === "admin" && !isSystemSchema && !isView;
+  // "Insert row" is the one write read_write users get on this page; insertRow
+  // re-checks role, schema and relkind server-side regardless.
+  const canInsertRow =
+    (session.role === "admin" || session.role === "read_write") && !isSystemSchema && !isView;
+  // Row selection, Delete and Edit address rows by the single-column PK; PK-less
+  // and composite-PK tables (pkCol null) get no checkboxes. The actions re-resolve it.
+  const canMutateRows = canInsertRow && pkCol !== null;
 
   let rows: Record<string, unknown>[] = [];
   let schemaColumns: SchemaColumn[] = [];
@@ -496,6 +506,22 @@ export default async function TableRowsPage({
     to = Math.min(offset + rows.length, total);
   }
 
+  // Cells are rendered to text here, on the server, so the client-side grid
+  // (DataTable: row selection) never receives raw values -- sensitive columns
+  // reach it already masked. key = the PK value as a string, for selection.
+  const dataRows: DataRow[] = rows.map((row) => ({
+    key: pkCol ? cursorValue(row[pkCol]) : null,
+    cells: columns.map((c) => {
+      const sensitive = isSensitive(schema, name, c.column_name);
+      const raw = row[c.column_name];
+      return {
+        text: sensitive ? maskedDisplay(raw) : renderCell(raw),
+        sensitive,
+        edit: sensitive ? undefined : editValue(raw),
+      };
+    }),
+  }));
+
   return (
     // h-full + flex column so the data table can flex to fill the leftover
     // height and scroll internally — keeps the page itself from overflowing
@@ -532,7 +558,10 @@ export default async function TableRowsPage({
             {columns.length} {columns.length === 1 ? "column" : "columns"}
           </p>
         </div>
-        <RefreshButton />
+        <div className="flex shrink-0 items-center gap-2">
+          {canInsertRow && <InsertRowDrawer schema={schema} table={name} columns={columns} />}
+          <RefreshButton />
+        </div>
       </div>
 
       {isSystemSchema && (
@@ -625,64 +654,15 @@ export default async function TableRowsPage({
               current={filter}
             />
           )}
-          <Card className="mt-3 min-h-0 flex-1 overflow-auto">
-            <table className="w-full border-collapse text-sm">
-              <thead>
-                <tr className="sticky top-0 z-10 border-b border-neutral-700 bg-neutral-800 text-left text-neutral-400">
-                  {columns.map((c) => (
-                    <th key={c.column_name} className="px-3 py-2 font-normal">
-                      <div className="font-mono text-neutral-100">{c.column_name}</div>
-                      <div className="text-xs text-neutral-500">{c.data_type}</div>
-                    </th>
-                  ))}
-                  {canAddColumn && (
-                    <th className="w-10 px-2 py-2 align-middle font-normal">
-                      <AddColumnDrawer schema={schema} table={name} />
-                    </th>
-                  )}
-                </tr>
-              </thead>
-              <tbody>
-                {rows.length === 0 ? (
-                  <tr>
-                    <td
-                      colSpan={columns.length + (canAddColumn ? 1 : 0)}
-                      className="px-3 py-6 text-center text-neutral-500"
-                    >
-                      No rows.
-                    </td>
-                  </tr>
-                ) : (
-                  rows.map((row, i) => (
-                    <tr
-                      key={i}
-                      className="border-b border-neutral-800 last:border-b-0 odd:bg-neutral-900 even:bg-neutral-950/40 hover:bg-neutral-800/50"
-                    >
-                      {columns.map((c) => {
-                        const sensitive = isSensitive(schema, name, c.column_name);
-                        const raw = row[c.column_name];
-                        const text = sensitive ? maskedDisplay(raw) : renderCell(raw);
-                        return (
-                          <td
-                            key={c.column_name}
-                            className={`max-w-xs truncate px-3 py-2 font-mono ${
-                              sensitive ? "text-neutral-500" : "text-neutral-300"
-                            }`}
-                            // Don't put the real value in a title= attribute — that
-                            // would re-expose it on hover.
-                            title={sensitive ? "masked" : text}
-                          >
-                            {text}
-                          </td>
-                        );
-                      })}
-                      {canAddColumn && <td className="w-10 px-2 py-2" aria-hidden="true" />}
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </Card>
+          <DataTable
+            schema={schema}
+            table={name}
+            columns={columns}
+            rows={dataRows}
+            pkCol={pkCol}
+            canMutate={canMutateRows}
+            addColumn={canAddColumn ? <AddColumnDrawer schema={schema} table={name} /> : null}
+          />
 
           <nav className="mt-4 flex items-center justify-between text-sm text-neutral-400">
             <span>

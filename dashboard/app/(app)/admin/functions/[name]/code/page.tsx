@@ -17,7 +17,7 @@ export default async function CodePage({
   if (!fn) notFound();
 
   return (
-    <div className="space-y-4">
+    <div className="flex min-h-0 flex-1 flex-col gap-4">
       {sp.error && (
         <p className="rounded border border-red-900/50 bg-red-950/30 px-3 py-2 text-sm text-red-300">
           {sp.error}
