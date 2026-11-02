@@ -215,3 +215,120 @@ export async function deleteTable(formData: FormData) {
   revalidatePath("/tables", "layout");
   redirectTables(undefined, `Dropped ${target}`);
 }
+
+// One row from the Data tab's "Insert row" drawer. admin and read_write only;
+// read_write runs under dashboard_sql_rw inside a transaction, mirroring the
+// SQL editor, so the DB layer (not this code) is what denies DDL. Real tables
+// in non-protected schemas only. Only columns that exist on the table and are
+// not generated / GENERATED ALWAYS AS IDENTITY are taken from the form; blank
+// fields are omitted so the column default applies. Values travel as query
+// parameters and Postgres casts them to each column's type.
+export async function insertRow(formData: FormData) {
+  const session = await getSession();
+  const role = session.role;
+  if (role !== "admin" && role !== "read_write") {
+    throw new Error("Admin or read/write only");
+  }
+  const ip = await clientIp();
+
+  const schema = String(formData.get("schema") ?? "").trim();
+  const table = String(formData.get("table") ?? "").trim();
+  const target = `${schema}.${table}`;
+  const colNames: string[] = [];
+
+  try {
+    if (!SAFE_IDENT.test(schema)) throw new Error("Unsafe schema identifier");
+    if (!SAFE_IDENT.test(table)) throw new Error("Unsafe table identifier");
+    if (PROTECTED_SCHEMAS.has(schema)) {
+      throw new Error(
+        `Tables in "${schema}" are managed by the platform and can't be edited here`,
+      );
+    }
+
+    const rel = await pool().query<{ relkind: string }>(
+      `SELECT c.relkind::text AS relkind
+         FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = $1 AND c.relname = $2`,
+      [schema, table],
+    );
+    const relkind = rel.rows[0]?.relkind;
+    if (relkind !== "r" && relkind !== "p") {
+      throw new Error("Rows can only be inserted into tables, not views");
+    }
+
+    const { rows: cols } = await pool().query<{ column_name: string }>(
+      `SELECT column_name
+         FROM information_schema.columns
+        WHERE table_schema = $1 AND table_name = $2
+          AND is_generated = 'NEVER'
+          AND (is_identity = 'NO' OR identity_generation = 'BY DEFAULT')
+        ORDER BY ordinal_position`,
+      [schema, table],
+    );
+    const values: string[] = [];
+    for (const c of cols) {
+      const v = formData.get(`col:${c.column_name}`);
+      // shortcut: blank means "use the column default" -- there is no way to
+      // insert an empty string or an explicit NULL over a non-null default;
+      // add a per-field null toggle in the drawer if that is ever needed.
+      if (typeof v === "string" && v !== "") {
+        colNames.push(c.column_name);
+        values.push(v);
+      }
+    }
+
+    const qualified = `${quoteIdent(schema)}.${quoteIdent(table)}`;
+    const sql =
+      colNames.length === 0
+        ? `INSERT INTO ${qualified} DEFAULT VALUES`
+        : `INSERT INTO ${qualified} (${colNames.map(quoteIdent).join(", ")}) ` +
+          `VALUES (${values.map((_, i) => `$${i + 1}`).join(", ")})`;
+
+    if (role === "admin") {
+      await pool().query(sql, values);
+    } else {
+      const client = await pool().connect();
+      try {
+        await client.query("BEGIN");
+        await client.query("SET LOCAL ROLE dashboard_sql_rw");
+        await client.query(sql, values);
+        await client.query("COMMIT");
+      } catch (e) {
+        await client.query("ROLLBACK").catch(() => {});
+        throw e;
+      } finally {
+        client.release();
+      }
+    }
+  } catch (e) {
+    const msg = (e as Error).message.split("\n")[0];
+    await audit({
+      actor: session.email!,
+      actorId: session.userId,
+      role,
+      action: "table.insert_row",
+      target,
+      success: false,
+      ip,
+      sessionId: session.sessionId ?? null,
+      metadata: { error: msg, schema, table, columns: colNames },
+    });
+    redirectTable(table, schema, { error: msg });
+  }
+
+  await audit({
+    actor: session.email!,
+    actorId: session.userId,
+    role,
+    action: "table.insert_row",
+    target,
+    success: true,
+    ip,
+    sessionId: session.sessionId ?? null,
+    metadata: { schema, table, columns: colNames },
+  });
+
+  // "layout" so the row count on the page and the sidebar both refresh.
+  revalidatePath("/tables", "layout");
+  redirectTable(table, schema, { ok: "Inserted 1 row" });
+}

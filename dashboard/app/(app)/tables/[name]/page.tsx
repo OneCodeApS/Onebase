@@ -11,6 +11,7 @@ import {
 } from "../_components/SchemaPanel";
 import { RowFilter } from "../_components/RowFilter";
 import { AddColumnDrawer } from "../_components/AddColumnDrawer";
+import { InsertRowDrawer } from "../_components/InsertRowDrawer";
 import { getSession } from "@/lib/session";
 
 const PAGE_SIZE = 50;
@@ -26,11 +27,17 @@ const DEFAULT_SCHEMA = "public";
 type Column = {
   column_name: string;
   data_type: string;
+  // Feed the Insert-row drawer: which fields are optional and which to omit.
+  is_nullable: string;
+  column_default: string | null;
+  is_identity: string;
+  identity_generation: string | null;
+  is_generated: string;
 };
 
 async function loadColumns(schema: string, table: string): Promise<Column[]> {
   const { rows } = await pool().query<Column>(
-    `SELECT column_name, data_type
+    `SELECT column_name, data_type, is_nullable, column_default, is_identity, identity_generation, is_generated
        FROM information_schema.columns
       WHERE table_schema = $1 AND table_name = $2
       ORDER BY ordinal_position`,
@@ -436,6 +443,10 @@ export default async function TableRowsPage({
   // The Data-tab "+" column (Add column) — admins only, real tables, never
   // system schemas. addColumn re-checks all of this server-side regardless.
   const canAddColumn = session.role === "admin" && !isSystemSchema && !isView;
+  // "Insert row" is the one write read_write users get on this page; insertRow
+  // re-checks role, schema and relkind server-side regardless.
+  const canInsertRow =
+    (session.role === "admin" || session.role === "read_write") && !isSystemSchema && !isView;
 
   let rows: Record<string, unknown>[] = [];
   let schemaColumns: SchemaColumn[] = [];
@@ -532,7 +543,10 @@ export default async function TableRowsPage({
             {columns.length} {columns.length === 1 ? "column" : "columns"}
           </p>
         </div>
-        <RefreshButton />
+        <div className="flex shrink-0 items-center gap-2">
+          {canInsertRow && <InsertRowDrawer schema={schema} table={name} columns={columns} />}
+          <RefreshButton />
+        </div>
       </div>
 
       {isSystemSchema && (

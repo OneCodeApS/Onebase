@@ -72,8 +72,10 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public
 -- READ ONLY transaction; admins keep full dashboard_admin. The matching
 -- migration is postgres/migrations/0020_sql_editor_role.sql.
 CREATE ROLE dashboard_sql_rw NOLOGIN NOINHERIT BYPASSRLS;
-GRANT pg_read_all_data  TO dashboard_sql_rw;
-GRANT pg_write_all_data TO dashboard_sql_rw;
+-- WITH INHERIT TRUE: a NOINHERIT member gets nothing from its roles otherwise,
+-- and SET ROLE dashboard_sql_rw would fail every query (migration 0031).
+GRANT pg_read_all_data  TO dashboard_sql_rw WITH INHERIT TRUE;
+GRANT pg_write_all_data TO dashboard_sql_rw WITH INHERIT TRUE;
 -- dashboard_admin must be a member to SET ROLE to it.
 GRANT dashboard_sql_rw TO dashboard_admin;
 
