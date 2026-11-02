@@ -8,6 +8,14 @@ While the project is on `0.x`, minor version bumps (`0.1 → 0.2`) may include b
 
 ## [Unreleased]
 
+### Changed
+
+- **`npm run create-admin` now reads `dashboard/.env.local` when it exists.** Running the dashboard outside Docker (README, "Running the dashboard outside Docker") already keeps the connection string in that file for `next dev`, but the admin bootstrap only looked at the shell environment, so you had to re-export `DATABASE_URL` by hand and a mispasted value failed with the confusing `getaddrinfo ENOTFOUND base`. Uses Node's `--env-file-if-exists` (Node 22.9+; the Docker image is `node:22`). Variables already set in the environment still win, so the Docker path (`docker compose run --rm dashboard npm run create-admin`) is unchanged.
+
+### Fixed
+
+- **`.env.example` now lists `FUNCTION_ENV_KEY`.** `docker-compose.yml` refuses to start without it (`FUNCTION_ENV_KEY must be set`), but the example never mentioned it, so a fresh install that followed the README's "fill in every blank" step failed at `docker compose up`. Generate it with `openssl rand -hex 32` (exactly 64 hex chars) and never change it once set, since existing encrypted edge-function env values become unreadable. No code change, no migration.
+
 ## [2.13.0] - 2026-10-02
 
 ### Added
