@@ -1,19 +1,19 @@
 # Multi-stage build for Next.js 15 in standalone mode.
 
-FROM node:22-bookworm-slim AS deps
+FROM node:24.22.1-bookworm-slim AS deps
 WORKDIR /app
 COPY package.json package-lock.json* ./
 # Use ci when lockfile exists; fall back to install on the first build.
 RUN if [ -f package-lock.json ]; then npm ci; else npm install; fi
 
-FROM node:22-bookworm-slim AS builder
+FROM node:24.22.1-bookworm-slim AS builder
 WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 RUN npm run build
 
-FROM node:22-bookworm-slim AS runner
+FROM node:24.22.1-bookworm-slim AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
