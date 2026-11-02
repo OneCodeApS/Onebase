@@ -1,13 +1,6 @@
-import { Card } from "../../../_components/Card";
-import { ConfirmDeleteForm } from "../../../_components/ConfirmDeleteForm";
 import { listEnvVars } from "@/lib/function-env";
-import { removeEnvVar } from "./actions";
 import { EnvVarModal } from "./_components/EnvVarModal";
-
-function formatTime(d: Date | string): string {
-  const date = d instanceof Date ? d : new Date(d);
-  return date.toISOString().replace("T", " ").slice(0, 19);
-}
+import { EnvVarsTable } from "./_components/EnvVarsTable";
 
 export default async function EnvPage({
   searchParams,
@@ -50,93 +43,7 @@ export default async function EnvPage({
         </p>
       )}
 
-      <Card className="mt-6 overflow-x-auto">
-        <table className="w-full border-collapse text-sm">
-          <thead>
-            <tr className="border-b border-neutral-700 bg-neutral-800/60 text-left text-neutral-400">
-              <th className="px-3 py-2 font-normal">Key</th>
-              <th className="px-3 py-2 font-normal">Value</th>
-              <th className="px-3 py-2 font-normal">Description</th>
-              <th className="px-3 py-2 font-normal">Updated</th>
-              <th className="px-3 py-2 font-normal" />
-            </tr>
-          </thead>
-          <tbody>
-            {vars.length === 0 ? (
-              <tr>
-                <td colSpan={5} className="px-3 py-6 text-center text-neutral-500">
-                  No variables yet. Click <strong>+ New variable</strong>.
-                </td>
-              </tr>
-            ) : (
-              vars.map((v) => (
-                <tr
-                  key={v.key}
-                  className="border-b border-neutral-800 last:border-b-0 odd:bg-neutral-900 even:bg-neutral-950/40 hover:bg-neutral-800/50"
-                >
-                  <td className="px-3 py-2 font-mono text-neutral-200">{v.key}</td>
-                  <td className="px-3 py-2 font-mono text-neutral-400">
-                    {v.value === "" ? (
-                      <span className="text-neutral-600">(empty)</span>
-                    ) : (
-                      <span className="text-neutral-300">{v.preview}</span>
-                    )}
-                    {v.legacy_plaintext && (
-                      <span
-                        className="ml-2 rounded border border-amber-900/40 bg-amber-950/30 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-amber-400"
-                        title="Stored in the legacy plaintext column. Re-save (Edit → Save) to encrypt."
-                      >
-                        unencrypted
-                      </span>
-                    )}
-                  </td>
-                  <td className="px-3 py-2 text-neutral-400">
-                    {v.description ?? "—"}
-                  </td>
-                  <td className="px-3 py-2 font-mono text-xs text-neutral-500">
-                    {formatTime(v.updated_at)}
-                  </td>
-                  <td className="px-3 py-2">
-                    <div className="flex justify-end gap-3">
-                      <EnvVarModal
-                        trigger={
-                          <button
-                            type="button"
-                            className="text-xs text-neutral-400 underline hover:text-neutral-100"
-                          >
-                            Edit
-                          </button>
-                        }
-                        initial={{
-                          key: v.key,
-                          value: v.value,
-                          description: v.description,
-                        }}
-                      />
-                      <ConfirmDeleteForm
-                        action={removeEnvVar}
-                        triggerLabel="Delete"
-                        triggerClassName="text-xs text-red-400 underline hover:text-red-200"
-                        title="Delete environment variable?"
-                        message={
-                          <>
-                            Delete <span className="font-mono text-neutral-100">{v.key}</span>?
-                            Any edge function reading{" "}
-                            <span className="font-mono text-neutral-100">ctx.env.{v.key}</span>{" "}
-                            will see <span className="font-mono">undefined</span> on its next invocation.
-                          </>
-                        }
-                      >
-                        <input type="hidden" name="key" value={v.key} />
-                      </ConfirmDeleteForm>
-                    </div>
-                  </td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-      </Card>
+      <EnvVarsTable vars={vars} />
     </main>
   );
 }

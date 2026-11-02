@@ -8,6 +8,10 @@ While the project is on `0.x`, minor version bumps (`0.1 → 0.2`) may include b
 
 ## [Unreleased]
 
+### Added
+
+- **Filter box on Admin → Functions → Environment variables.** The global edge-function env list had no way to find a key once it grew past a screen. The page now has the same client-side filter as the Functions, Cron and Enums tables: type to narrow the rows by key or description, with an "n of m" count beside the box. Values are not searched; only the key and description are matched. Dashboard-only; no migration.
+
 ### Security
 
 - **Next.js upgraded from 16.2.6 to 16.4.3.** `npm audit` rated the installed version critical: twenty advisories fixed between the two, including unauthenticated remote code execution in the Image Optimization API (SVG and AVIF inputs), in `use cache` functions and in `next/og`; denial of service through Server Actions, which every dashboard form uses; and an App Router middleware bypass, the layer that gates `/admin` here. Same major, so no API changes; `npm install` picks it up and the Docker image rebuilds with it. The remaining `npm audit` findings (`nodemailer` 8.x, `minio` 8.x and five transitive packages) are not addressed by this entry.
