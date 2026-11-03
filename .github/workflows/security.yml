@@ -1,0 +1,29 @@
+# Lægges i hvert projekt-repo som .github/workflows/security.yml
+# Al logik ligger i det centrale repo "security-workflows".
+
+name: Security
+
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+  schedule:
+    - cron: "0 5 * * 1"   # hver mandag: fanger nye CVE'er i kode, der ikke er ændret
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  security:
+    uses: OneCodeApS/security-workflows/.github/workflows/security-baseline.yml@main
+    with:
+      zap_target_url: ""         # fx https://staging.kunde.dk
+      fail_on_findings: false    # sæt til true når repoet er ryddet op
+      run_claude_review: false   # sæt til true når CLAUDE_API_KEY er oprettet
+      # exclude_paths: "logs,dist,build"   # valgfrit: overskriv standardlisten
+      notify_on_pr: false        # true = også Teams-besked ved pull requests
+    secrets:
+      CLAUDE_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
+      TEAMS_WEBHOOK_URL: ${{ secrets.TEAMS_WEBHOOK_URL }}
