@@ -34,7 +34,7 @@ jobs:
       tag: ${{ steps.bump.outputs.tag }}
       is_release: ${{ steps.bump.outputs.is_release }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0   # full history so we can read existing tags
 
