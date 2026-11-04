@@ -18,6 +18,7 @@ by Onebase upgrades — none of the steps below touch it.
 - [Upgrading PostgreSQL (major version)](#upgrading-postgresql-major-version)
 - [Rolling back to a previous version](#rolling-back-to-a-previous-version)
 - [Running multiple dashboard replicas (HA)](#running-multiple-dashboard-replicas-ha)
+- [Postgres and MinIO resource settings](#postgres-and-minio-resource-settings)
 - [Connecting a BI tool / SQL client over SSH](#connecting-a-bi-tool--sql-client-over-ssh)
 - [Troubleshooting](#troubleshooting)
 - [Notes](#notes)
@@ -506,6 +507,139 @@ immediately.
 
 ---
 
+## Postgres and MinIO resource settings
+
+`docker-compose.yml` sizes Postgres and MinIO for the **8 GB backend box** they share with
+the dashboard replicas, PostgREST and Caddy. Postgres ships with defaults meant for a tiny
+machine (a 128 MB buffer cache, 4 MB per sort, a 1 GB WAL ceiling, a cost model for spinning
+disks), so without these flags it reads from disk far more than it needs to and the Home
+page's cache-hit ratio sits in the low 90s. MinIO, left alone, runs a background scanner
+over every object's metadata file non-stop and grows its heap into the page cache that
+Postgres depends on.
+
+What is set, and why:
+
+| Service | Setting | Value | Why |
+| --- | --- | --- | --- |
+| postgres | `shared_buffers` | 1536MB | Postgres's own cache. The default is 128 MB regardless of machine size. |
+| postgres | `effective_cache_size` | 4GB | How much data the planner may assume is cached (buffers + OS cache). Affects plan choice only; allocates nothing. |
+| postgres | `work_mem` | 16MB | Per-sort / per-hash memory before spilling to temp files. Bounded by the pool sizes (30 + 30) and the 30 s statement timeout. |
+| postgres | `maintenance_work_mem` | 256MB | Faster VACUUM and index builds. |
+| postgres | `random_page_cost` | 1.1 | SSD/NVMe. The default (4.0) assumes spinning disks and steers the planner away from index scans. |
+| postgres | `max_wal_size` | 4GB | Fewer forced checkpoints, so far fewer full-page writes under steady inserts (audit log, cron). |
+| postgres | `wal_compression` | lz4 | Compresses those full-page images; near-free on CPU. Needs an image built with lz4 — see the check below. |
+| postgres | `shared_preload_libraries` | pg_stat_statements | Per-query timing statistics. Migration 0034 creates the extension. |
+| postgres | `track_io_timing` | on | Adds read/write time to those statistics. |
+| postgres | `shm_size` (container) | 256m | Docker's 64 MB `/dev/shm` default is too small for parallel-query shared memory once `work_mem` goes up. |
+| minio | `MINIO_SCANNER_SPEED` | slowest | Throttles the background object scanner. Onebase never reads the usage numbers it produces. |
+| minio | `GOMEMLIMIT` + container memory limit | 1500MiB / 2g | Caps MinIO's heap so it cannot grow into the page cache. The Go GC keeps it under the soft cap rather than Docker killing it at the hard one. |
+
+The Home page's **Cache hit ratio** card is the quick check: it should sit above 99% once
+the buffer cache is sized. It is cumulative since the last stats reset, so expect it to climb
+over days, not minutes.
+
+### Applying on an existing install
+
+`scripts/deploy.sh` never touches Postgres or MinIO, so pulling a release that changes these
+settings does **not** apply them. Apply them deliberately, in a quiet window:
+
+- **MinIO:** recreating the container makes uploads, downloads and the Storage pages
+  unavailable for a few seconds. Already-issued signed URLs stay valid (the signature depends
+  only on the keys and the clock). No database downtime.
+- **Postgres:** `shared_buffers` and `shared_preload_libraries` only take effect on a restart,
+  so the database is offline for roughly 5–15 seconds. Everything that touches it (REST, auth,
+  edge functions, cron, dashboard, realtime) errors during that window and reconnects on its
+  own afterwards: PgBouncer reopens server connections on demand and shields the dashboard's
+  main pool; the realtime listener and the scheduler leader lock have their own reconnect
+  loops (leader re-election within ~15 s); the dashboard replicas do not crash. Cron jobs that
+  fire inside the window are logged as failed and run at their next schedule. Realtime
+  browsers reconnect; events in the gap are missed. PostgREST reconnects with exponential
+  backoff, so restart it explicitly rather than waiting up to ~30 s.
+
+```bash
+cd /opt/onebase
+git pull --ff-only
+./scripts/pg-backup.sh                 # cheap insurance; nothing below touches the data volume
+
+# 1. Confirm the Postgres image was built with lz4 (the official images are).
+#    If this prints nothing, change wal_compression=lz4 to wal_compression=on
+#    in docker-compose.yml before continuing — Postgres refuses to start on an
+#    unsupported value.
+docker compose -f docker-compose.yml -f docker-compose.prod.yml exec postgres \
+  pg_config --configure | grep -o -- '--with-lz4'
+
+# 2. MinIO first — no database downtime. Give it a day if you want to watch it on its own.
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --no-deps minio
+
+# 3. Postgres — the short outage described above.
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --no-deps postgres
+docker compose -f docker-compose.yml -f docker-compose.prod.yml restart postgrest
+
+# 4. Create the statistics extension (idempotent; the normal migration loop covers it too).
+docker compose -f docker-compose.yml -f docker-compose.prod.yml exec -T postgres \
+  psql -U postgres -d postgres -v ON_ERROR_STOP=1 < postgres/migrations/0034_pg_stat_statements.sql
+
+# 5. Verify.
+docker compose -f docker-compose.yml -f docker-compose.prod.yml exec postgres \
+  psql -U postgres -c 'SHOW shared_buffers' -c 'SHOW shared_preload_libraries'
+docker stats --no-stream               # minio should settle well under its 2 GiB limit
+```
+
+`--no-deps` matters. A bare `docker compose … up -d` recreates every service whose config
+changed, which after pulling this release means **Postgres restarts whenever someone runs
+it** until the settings have been applied. Use the explicit commands above.
+
+**Rollback:** revert the flags in `docker-compose.yml` and run the same `up -d --no-deps`
+commands. It is another short restart; nothing in the data volume changes either way.
+
+### Reading the query statistics
+
+Top statements by total time, from the SQL editor or `psql`, after a day of traffic:
+
+```sql
+SELECT calls,
+       round(total_exec_time::numeric, 0) AS total_ms,
+       round(mean_exec_time::numeric, 1)  AS mean_ms,
+       rows,
+       round(100.0 * shared_blks_hit / nullif(shared_blks_hit + shared_blks_read, 0), 1) AS hit_pct,
+       left(query, 120) AS query
+  FROM _dashboard.pg_stat_statements
+ ORDER BY total_exec_time DESC
+ LIMIT 20;
+```
+
+A statement with many calls and a low `hit_pct` is a missing index or an under-sized cache;
+one with few calls and a huge `mean_ms` is a query to rewrite. The extension lives in
+`_dashboard`, not `public`, so it is not exposed through PostgREST.
+
+### Host settings worth setting once
+
+```bash
+# Prefer dropping page cache over swapping out Postgres / Node. A swapped-out backend is a
+# latency spike the next time it is used.
+echo 'vm.swappiness=10' | sudo tee /etc/sysctl.d/99-onebase.conf && sudo sysctl -p /etc/sysctl.d/99-onebase.conf
+
+# Ten-minute samples of CPU, memory, disk and swap, kept for a month, so "it was slow at
+# three o'clock" can be answered after the fact.
+sudo apt-get install -y sysstat && sudo systemctl enable --now sysstat
+sar -u -r -b -W 1 10                   # live: cpu, memory, io, swapping
+sar -b -f /var/log/sysstat/saDD        # history for day DD of the month
+pidstat -d 5 3                         # which process is doing the disk I/O
+```
+
+### Scaling the box
+
+The values above assume 8 GB shared with MinIO (capped at 2 GiB) and two dashboard replicas.
+On a 16 GB host use `shared_buffers=4GB`, `effective_cache_size=11GB`, `work_mem=32MB`,
+`maintenance_work_mem=512MB`, and raise MinIO's cap to taste. The rule of thumb is the one
+managed providers apply: about a quarter of RAM for `shared_buffers` and half to three
+quarters for `effective_cache_size`, after subtracting whatever else shares the machine.
+Before buying a bigger box, consider moving MinIO to its own small host — Onebase reaches it
+by hostname (`MINIO_ENDPOINT` on the dashboard, the `minio:9000` upstream in the Caddyfile),
+and it is the service that competes with Postgres for memory.
+
+---
+
 ## Connecting a BI tool / SQL client over SSH
 
 For Power BI, Excel, DBeaver, `psql`, or any other tool that speaks the PostgreSQL
@@ -837,9 +971,11 @@ Always use `down -v` when you want a true reset (this destroys all data).
 - **Migrations don't run automatically.** They're SQL files in `postgres/migrations/` that
   the operator applies (step 4 of the major-upgrade path). The dashboard container expects
   the schema to already match.
-- **Updates are dashboard-only.** Postgres / MinIO / Caddy version bumps are separate — those
-  require explicit version bumps in `docker-compose.yml` and a full `up -d` for the affected
-  service. Not part of a normal Onebase release.
+- **Updates are dashboard-only.** Postgres / MinIO / Caddy version bumps and resource settings
+  are separate — those require explicit changes in `docker-compose.yml` and an
+  `up -d --no-deps <service>` for the affected service (see
+  [Postgres and MinIO resource settings](#postgres-and-minio-resource-settings)). Not part of
+  a normal Onebase release.
 - **The public front doesn't need to change** for an Onebase upgrade. Its site file proxies
   by hostname, regardless of which dashboard version is behind it.
 - **The `postgres/init/*.sql` scripts only run on a fresh DB** (first ever boot of the

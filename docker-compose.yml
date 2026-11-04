@@ -8,13 +8,51 @@ services:
     # a fresh install just initialises cleanly.
     image: postgres:18-alpine
     restart: unless-stopped
-    # Headroom over the combined pools (dashboard 30 + PostgREST 30 + ad-hoc
-    # admin connections). 150 fits within the 2 GB recommended RAM — each
-    # backend costs ~10 MB. Bump to ~300 once PgBouncer is in front.
+    # Sized for the 8 GB backend box this stack shares with MinIO (capped at
+    # 2 GiB below), two dashboard replicas, PostgREST and Caddy. Postgres's
+    # own defaults assume a tiny machine (128 MB buffer cache, 4 MB per sort,
+    # 1 GB WAL ceiling, spinning-disk cost model) and were what shipped until
+    # 2.15.0 — the Home page's cache-hit ratio sat in the low 90s because of
+    # it. Rule of thumb, the one managed providers use: ~25% of RAM for
+    # shared_buffers and 50–75% for effective_cache_size, after subtracting
+    # whatever else shares the host. On 16 GB: shared_buffers=4GB,
+    # effective_cache_size=11GB, work_mem=32MB, maintenance_work_mem=512MB.
+    #
+    # max_connections: headroom over the combined pools (dashboard 30 via
+    # PgBouncer + PostgREST 30 direct + realtime/leader + ad-hoc admin). Each
+    # backend costs ~10 MB; 150 is plenty with PgBouncer in front.
+    #
+    # shared_buffers and shared_preload_libraries only take effect on a
+    # restart. See docs/OPERATIONS.md → "Postgres and MinIO resource
+    # settings" for applying this to a running install, including the lz4
+    # check: wal_compression=lz4 needs an image built with lz4 (the official
+    # images are); fall back to wal_compression=on otherwise.
     command:
       - "postgres"
       - "-c"
       - "max_connections=150"
+      - "-c"
+      - "shared_buffers=1536MB"
+      - "-c"
+      - "effective_cache_size=4GB"
+      - "-c"
+      - "work_mem=16MB"
+      - "-c"
+      - "maintenance_work_mem=256MB"
+      - "-c"
+      - "random_page_cost=1.1"
+      - "-c"
+      - "max_wal_size=4GB"
+      - "-c"
+      - "wal_compression=lz4"
+      - "-c"
+      - "shared_preload_libraries=pg_stat_statements"
+      - "-c"
+      - "track_io_timing=on"
+    # Docker's /dev/shm defaults to 64 MB. Postgres puts parallel-query shared
+    # memory there, and with work_mem raised a parallel hash join can exceed it
+    # ("could not resize shared memory segment ... No space left on device").
+    shm_size: 256m
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-postgres}
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
@@ -127,6 +165,26 @@ services:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:?MINIO_ROOT_USER must be set}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD must be set}
       MINIO_BROWSER_REDIRECT_URL: ${DASHBOARD_PUBLIC_URL:-http://dashboard.localhost}
+      # MinIO's background scanner walks every object's metadata file in a
+      # loop (usage stats, healing, lifecycle). On one disk with many small
+      # objects it never finishes: on the 8 GB prod box it was the only
+      # constant disk reader (1.8 TB read vs <1 GB served over 26 days) and
+      # churned the page cache Postgres depends on. Onebase never reads the
+      # numbers it produces (storage usage is computed by listing objects in
+      # lib/stats.ts), so the slowest setting costs nothing visible.
+      MINIO_SCANNER_SPEED: slowest
+      # Go's soft heap cap, a bit under the hard container limit below, so the
+      # garbage collector keeps MinIO inside the limit instead of Docker
+      # killing it. Unlimited, MinIO grew to ~3 GiB on an 8 GB host.
+      GOMEMLIMIT: 1500MiB
+    deploy:
+      resources:
+        limits:
+          # Hard cap. If MinIO ever exceeds it, Docker restarts it (a few
+          # seconds of storage unavailability) rather than letting it push
+          # Postgres into swap. Raise together with GOMEMLIMIT on a bigger
+          # host.
+          memory: 2g
     volumes:
       - minio-data:/data
     ports:
