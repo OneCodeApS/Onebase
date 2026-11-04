@@ -5,7 +5,7 @@ name: Security
 
 on:
   push:
-    branches: [main, master, staging, prod, production]   # merges til staging og produktion
+    branches: [main, master, '[Ss]taging*', 'STAGING*', '[Pp]rod*', 'PROD*']   # merges til staging og produktion
   schedule:
     - cron: "0 5 * * 1"   # mandag kl. 05 UTC; den centrale workflow kører kun i lige uger = hver 14. dag
   workflow_dispatch:
