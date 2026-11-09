@@ -273,6 +273,10 @@ sudo chown 1001:1001 /data/audit-logs              # dashboard container runs as
 - `AUDIT_HOST_PATH` is on the big disk so audit logs don't fill `/`; chown it to `1001:1001`.
 - `_PUBLIC_URL`s use `https://` (what the public hits the front with) even though the backend serves HTTP.
 - `GHCR_OWNER` lowercase. `DASHBOARD_IMAGE_TAG` is the version **without** the leading `v` (e.g. `2.0.0`).
+- Postgres and MinIO are sized for an **8 GB** box by default. On anything else, append the matching
+  `PG_*` / `MINIO_*` block from `.env.example` → "Resource sizing" **before** the first `up`, or Postgres
+  starts with a 1.5 GB buffer cache the host cannot spare. See [`OPERATIONS.md`](./OPERATIONS.md) →
+  "Postgres and MinIO resource settings".
 
 ### 2.6 Bring up the stack
 

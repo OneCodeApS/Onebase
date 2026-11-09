@@ -8,6 +8,12 @@ While the project is on `0.x`, minor version bumps (`0.1 → 0.2`) may include b
 
 ## [Unreleased]
 
+## [2.16.0] - 2026-11-09
+
+### Changed
+
+- **Postgres and MinIO sizing is now set per host in `.env` instead of being hardcoded in `docker-compose.yml`.** 2.15.0 shipped `shared_buffers=1536MB`, `effective_cache_size=4GB`, `work_mem=16MB`, `maintenance_work_mem=256MB`, `max_wal_size=4GB` and a 2 GiB MinIO cap as literals, sized for the 8 GB production box. Applied unchanged on a smaller host (the 3.8 GiB staging box, for one) they exceed RAM and push Postgres into swap, and the only way to adjust them was to edit the compose file on the server, which makes `git pull --ff-only` in `scripts/deploy.sh` abort on the next release that touches that file. Each value is now `${PG_…:-<8 GB default>}` / `${MINIO_…:-…}`: unset, nothing changes (`docker compose config` renders the same Postgres command line and MinIO limits as 2.15.0); set in `.env`, it wins. New optional variables: `PG_SHARED_BUFFERS`, `PG_EFFECTIVE_CACHE_SIZE`, `PG_WORK_MEM`, `PG_MAINTENANCE_WORK_MEM`, `PG_RANDOM_PAGE_COST`, `PG_MAX_WAL_SIZE`, `PG_WAL_COMPRESSION`, `MINIO_GOMEMLIMIT`, `MINIO_MEMORY_LIMIT`. Ready-made sets for 4 GB and 16 GB hosts are in `.env.example` and `docs/OPERATIONS.md` → "Postgres and MinIO resource settings", and the lz4 fallback is now `PG_WAL_COMPRESSION=on` rather than a file edit. Operators: nothing to do on an 8 GB host. On any other size, write the values into `.env` **before** running `up -d --no-deps postgres` / `minio`; they take effect on that recreate (the same short restart described under 2.15.0). No image change and no migration — `git pull` is all the server needs for this one.
+
 ## [2.15.0] - 2026-11-04
 
 ### Added

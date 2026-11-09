@@ -8,15 +8,22 @@ services:
     # a fresh install just initialises cleanly.
     image: postgres:18-alpine
     restart: unless-stopped
-    # Sized for the 8 GB backend box this stack shares with MinIO (capped at
-    # 2 GiB below), two dashboard replicas, PostgREST and Caddy. Postgres's
-    # own defaults assume a tiny machine (128 MB buffer cache, 4 MB per sort,
-    # 1 GB WAL ceiling, spinning-disk cost model) and were what shipped until
-    # 2.15.0 — the Home page's cache-hit ratio sat in the low 90s because of
-    # it. Rule of thumb, the one managed providers use: ~25% of RAM for
-    # shared_buffers and 50–75% for effective_cache_size, after subtracting
-    # whatever else shares the host. On 16 GB: shared_buffers=4GB,
-    # effective_cache_size=11GB, work_mem=32MB, maintenance_work_mem=512MB.
+    # Sized by default for the 8 GB backend box this stack shares with MinIO
+    # (capped at 2 GiB below), two dashboard replicas, PostgREST and Caddy.
+    # Postgres's own defaults assume a tiny machine (128 MB buffer cache, 4 MB
+    # per sort, 1 GB WAL ceiling, spinning-disk cost model) and were what
+    # shipped until 2.15.0 — the Home page's cache-hit ratio sat in the low
+    # 90s because of it.
+    #
+    # Every sizing value below reads from .env with the 8 GB number as its
+    # default, so a smaller or larger host sets its own values in .env and
+    # never edits this file (a local edit makes `git pull --ff-only` in
+    # scripts/deploy.sh abort on the next release that touches it). Rule of
+    # thumb, the one managed providers use: ~25% of RAM for shared_buffers
+    # and 50–75% for effective_cache_size, after subtracting whatever else
+    # shares the host. Ready-made sets for 4 GB and 16 GB hosts are in
+    # .env.example and docs/OPERATIONS.md → "Postgres and MinIO resource
+    # settings".
     #
     # max_connections: headroom over the combined pools (dashboard 30 via
     # PgBouncer + PostgREST 30 direct + realtime/leader + ad-hoc admin). Each
@@ -24,27 +31,27 @@ services:
     #
     # shared_buffers and shared_preload_libraries only take effect on a
     # restart. See docs/OPERATIONS.md → "Postgres and MinIO resource
-    # settings" for applying this to a running install, including the lz4
-    # check: wal_compression=lz4 needs an image built with lz4 (the official
-    # images are); fall back to wal_compression=on otherwise.
+    # settings" for applying this to a running install. wal_compression=lz4
+    # needs an image built with lz4 (the official images are); set
+    # PG_WAL_COMPRESSION=on in .env otherwise.
     command:
       - "postgres"
       - "-c"
       - "max_connections=150"
       - "-c"
-      - "shared_buffers=1536MB"
+      - "shared_buffers=${PG_SHARED_BUFFERS:-1536MB}"
       - "-c"
-      - "effective_cache_size=4GB"
+      - "effective_cache_size=${PG_EFFECTIVE_CACHE_SIZE:-4GB}"
       - "-c"
-      - "work_mem=16MB"
+      - "work_mem=${PG_WORK_MEM:-16MB}"
       - "-c"
-      - "maintenance_work_mem=256MB"
+      - "maintenance_work_mem=${PG_MAINTENANCE_WORK_MEM:-256MB}"
       - "-c"
-      - "random_page_cost=1.1"
+      - "random_page_cost=${PG_RANDOM_PAGE_COST:-1.1}"
       - "-c"
-      - "max_wal_size=4GB"
+      - "max_wal_size=${PG_MAX_WAL_SIZE:-4GB}"
       - "-c"
-      - "wal_compression=lz4"
+      - "wal_compression=${PG_WAL_COMPRESSION:-lz4}"
       - "-c"
       - "shared_preload_libraries=pg_stat_statements"
       - "-c"
@@ -175,16 +182,17 @@ services:
       MINIO_SCANNER_SPEED: slowest
       # Go's soft heap cap, a bit under the hard container limit below, so the
       # garbage collector keeps MinIO inside the limit instead of Docker
-      # killing it. Unlimited, MinIO grew to ~3 GiB on an 8 GB host.
-      GOMEMLIMIT: 1500MiB
+      # killing it. Unlimited, MinIO grew to ~3 GiB on an 8 GB host. Both
+      # numbers read from .env (MINIO_GOMEMLIMIT / MINIO_MEMORY_LIMIT) with
+      # the 8 GB values as defaults; always change them together.
+      GOMEMLIMIT: ${MINIO_GOMEMLIMIT:-1500MiB}
     deploy:
       resources:
         limits:
           # Hard cap. If MinIO ever exceeds it, Docker restarts it (a few
           # seconds of storage unavailability) rather than letting it push
-          # Postgres into swap. Raise together with GOMEMLIMIT on a bigger
-          # host.
-          memory: 2g
+          # Postgres into swap.
+          memory: ${MINIO_MEMORY_LIMIT:-2g}
     volumes:
       - minio-data:/data
     ports:
