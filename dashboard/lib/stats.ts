@@ -243,7 +243,11 @@ async function getDbHealth(): Promise<DbHealth> {
         ORDER BY query_start ASC
         LIMIT 1`,
     ),
-    pool().query<{ max: string }>("SHOW max_connections"),
+    // Not `SHOW max_connections`: SHOW names its column after the setting, so
+    // rows[0].max was always undefined and the card rendered "n / 0".
+    pool().query<{ max: string }>(
+      "SELECT current_setting('max_connections') AS max",
+    ),
   ]);
 
   const hit = Number(cache.rows[0]?.hit ?? 0);

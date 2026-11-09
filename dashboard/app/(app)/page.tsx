@@ -215,8 +215,8 @@ function CacheHitCard({ ratio }: { ratio: number | null }) {
     pct >= 99
       ? "healthy"
       : pct >= 95
-        ? "warming up or under-sized cache"
-        : "high disk pressure — consider more RAM";
+        ? "warming up, or shared_buffers is under-sized"
+        : "cache misses — raise shared_buffers before adding RAM";
   return (
     <Card padded className="h-full">
       <div className="text-xs uppercase tracking-wider text-neutral-500">
