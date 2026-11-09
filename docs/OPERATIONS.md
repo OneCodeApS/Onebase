@@ -517,22 +517,28 @@ page's cache-hit ratio sits in the low 90s. MinIO, left alone, runs a background
 over every object's metadata file non-stop and grows its heap into the page cache that
 Postgres depends on.
 
+Every sizing value is read from `.env` with the 8 GB number as its default, so a host of a
+different size sets its own values there and never edits `docker-compose.yml` (a local edit
+makes the `git pull --ff-only` in `scripts/deploy.sh` abort on the next release that touches
+the file). Ready-made sets for 4 GB and 16 GB hosts are under
+[Scaling the box](#scaling-the-box).
+
 What is set, and why:
 
-| Service | Setting | Value | Why |
-| --- | --- | --- | --- |
-| postgres | `shared_buffers` | 1536MB | Postgres's own cache. The default is 128 MB regardless of machine size. |
-| postgres | `effective_cache_size` | 4GB | How much data the planner may assume is cached (buffers + OS cache). Affects plan choice only; allocates nothing. |
-| postgres | `work_mem` | 16MB | Per-sort / per-hash memory before spilling to temp files. Bounded by the pool sizes (30 + 30) and the 30 s statement timeout. |
-| postgres | `maintenance_work_mem` | 256MB | Faster VACUUM and index builds. |
-| postgres | `random_page_cost` | 1.1 | SSD/NVMe. The default (4.0) assumes spinning disks and steers the planner away from index scans. |
-| postgres | `max_wal_size` | 4GB | Fewer forced checkpoints, so far fewer full-page writes under steady inserts (audit log, cron). |
-| postgres | `wal_compression` | lz4 | Compresses those full-page images; near-free on CPU. Needs an image built with lz4 — see the check below. |
-| postgres | `shared_preload_libraries` | pg_stat_statements | Per-query timing statistics. Migration 0034 creates the extension. |
-| postgres | `track_io_timing` | on | Adds read/write time to those statistics. |
-| postgres | `shm_size` (container) | 256m | Docker's 64 MB `/dev/shm` default is too small for parallel-query shared memory once `work_mem` goes up. |
-| minio | `MINIO_SCANNER_SPEED` | slowest | Throttles the background object scanner. Onebase never reads the usage numbers it produces. |
-| minio | `GOMEMLIMIT` + container memory limit | 1500MiB / 2g | Caps MinIO's heap so it cannot grow into the page cache. The Go GC keeps it under the soft cap rather than Docker killing it at the hard one. |
+| Service | Setting | Default | `.env` override | Why |
+| --- | --- | --- | --- | --- |
+| postgres | `shared_buffers` | 1536MB | `PG_SHARED_BUFFERS` | Postgres's own cache. The default is 128 MB regardless of machine size. |
+| postgres | `effective_cache_size` | 4GB | `PG_EFFECTIVE_CACHE_SIZE` | How much data the planner may assume is cached (buffers + OS cache). Affects plan choice only; allocates nothing. |
+| postgres | `work_mem` | 16MB | `PG_WORK_MEM` | Per-sort / per-hash memory before spilling to temp files. Bounded by the pool sizes (30 + 30) and the 30 s statement timeout. |
+| postgres | `maintenance_work_mem` | 256MB | `PG_MAINTENANCE_WORK_MEM` | Faster VACUUM and index builds. |
+| postgres | `random_page_cost` | 1.1 | `PG_RANDOM_PAGE_COST` | SSD/NVMe. The default (4.0) assumes spinning disks and steers the planner away from index scans. |
+| postgres | `max_wal_size` | 4GB | `PG_MAX_WAL_SIZE` | Fewer forced checkpoints, so far fewer full-page writes under steady inserts (audit log, cron). |
+| postgres | `wal_compression` | lz4 | `PG_WAL_COMPRESSION` | Compresses those full-page images; near-free on CPU. Needs an image built with lz4 — see the check below; set `on` otherwise. |
+| postgres | `shared_preload_libraries` | pg_stat_statements | — | Per-query timing statistics. Migration 0034 creates the extension. |
+| postgres | `track_io_timing` | on | — | Adds read/write time to those statistics. |
+| postgres | `shm_size` (container) | 256m | — | Docker's 64 MB `/dev/shm` default is too small for parallel-query shared memory once `work_mem` goes up. A ceiling, not an allocation. |
+| minio | `MINIO_SCANNER_SPEED` | slowest | — | Throttles the background object scanner. Onebase never reads the usage numbers it produces. |
+| minio | `GOMEMLIMIT` + container memory limit | 1500MiB / 2g | `MINIO_GOMEMLIMIT` / `MINIO_MEMORY_LIMIT` | Caps MinIO's heap so it cannot grow into the page cache. The Go GC keeps it under the soft cap rather than Docker killing it at the hard one. Always change the two together. |
 
 The Home page's **Cache hit ratio** card is the quick check: it should sit above 99% once
 the buffer cache is sized. It is cumulative since the last stats reset, so expect it to climb
@@ -561,10 +567,12 @@ cd /opt/onebase
 git pull --ff-only
 ./scripts/pg-backup.sh                 # cheap insurance; nothing below touches the data volume
 
+# 0. Not an 8 GB host? Append the matching PG_* / MINIO_* block from "Scaling
+#    the box" below to .env first. Only the recreate steps below read them.
+
 # 1. Confirm the Postgres image was built with lz4 (the official images are).
-#    If this prints nothing, change wal_compression=lz4 to wal_compression=on
-#    in docker-compose.yml before continuing — Postgres refuses to start on an
-#    unsupported value.
+#    If this prints nothing, add PG_WAL_COMPRESSION=on to .env before
+#    continuing — Postgres refuses to start on an unsupported value.
 docker compose -f docker-compose.yml -f docker-compose.prod.yml exec postgres \
   pg_config --configure | grep -o -- '--with-lz4'
 
@@ -589,8 +597,11 @@ docker stats --no-stream               # minio should settle well under its 2 Gi
 changed, which after pulling this release means **Postgres restarts whenever someone runs
 it** until the settings have been applied. Use the explicit commands above.
 
-**Rollback:** revert the flags in `docker-compose.yml` and run the same `up -d --no-deps`
-commands. It is another short restart; nothing in the data volume changes either way.
+**Rollback:** set smaller values in `.env` (Postgres's own stock defaults are
+`PG_SHARED_BUFFERS=128MB`, `PG_WORK_MEM=4MB`, `PG_MAINTENANCE_WORK_MEM=64MB`,
+`PG_MAX_WAL_SIZE=1GB`, `PG_RANDOM_PAGE_COST=4.0`, `PG_WAL_COMPRESSION=off`) and run the same
+`up -d --no-deps` commands. It is another short restart; nothing in the data volume changes
+either way.
 
 ### Reading the query statistics
 
@@ -629,14 +640,40 @@ pidstat -d 5 3                         # which process is doing the disk I/O
 
 ### Scaling the box
 
-The values above assume 8 GB shared with MinIO (capped at 2 GiB) and two dashboard replicas.
-On a 16 GB host use `shared_buffers=4GB`, `effective_cache_size=11GB`, `work_mem=32MB`,
-`maintenance_work_mem=512MB`, and raise MinIO's cap to taste. The rule of thumb is the one
-managed providers apply: about a quarter of RAM for `shared_buffers` and half to three
-quarters for `effective_cache_size`, after subtracting whatever else shares the machine.
-Before buying a bigger box, consider moving MinIO to its own small host — Onebase reaches it
-by hostname (`MINIO_ENDPOINT` on the dashboard, the `minio:9000` upstream in the Caddyfile),
-and it is the service that competes with Postgres for memory.
+The defaults assume 8 GB shared with MinIO (capped at 2 GiB) and two dashboard replicas. On
+any other size, append the matching block to `.env` and run the recreate steps above. The
+rule of thumb is the one managed providers apply: about a quarter of RAM for
+`shared_buffers` and half to three quarters for `effective_cache_size`, after subtracting
+whatever else shares the machine; `work_mem` is bounded by the 60 pooled connections, so it
+scales down faster than the rest.
+
+```bash
+# 4 GB host (e.g. a staging box). MinIO's two numbers are the first to raise
+# if `docker stats` shows it being restarted.
+PG_SHARED_BUFFERS=768MB
+PG_EFFECTIVE_CACHE_SIZE=2GB
+PG_WORK_MEM=8MB
+PG_MAINTENANCE_WORK_MEM=128MB
+PG_MAX_WAL_SIZE=2GB
+MINIO_GOMEMLIMIT=768MiB
+MINIO_MEMORY_LIMIT=1g
+```
+
+```bash
+# 16 GB host
+PG_SHARED_BUFFERS=4GB
+PG_EFFECTIVE_CACHE_SIZE=11GB
+PG_WORK_MEM=32MB
+PG_MAINTENANCE_WORK_MEM=512MB
+PG_MAX_WAL_SIZE=4GB
+MINIO_GOMEMLIMIT=3000MiB
+MINIO_MEMORY_LIMIT=4g
+```
+
+Confirm what took effect with `SHOW shared_buffers` (the verify step above) and
+`docker stats --no-stream`. Before buying a bigger box, consider moving MinIO to its own small
+host — Onebase reaches it by hostname (`MINIO_ENDPOINT` on the dashboard, the `minio:9000`
+upstream in the Caddyfile), and it is the service that competes with Postgres for memory.
 
 ---
 
