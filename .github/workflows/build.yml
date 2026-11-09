@@ -34,7 +34,7 @@ jobs:
       tag: ${{ steps.bump.outputs.tag }}
       is_release: ${{ steps.bump.outputs.is_release }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0   # full history so we can read existing tags
 
@@ -126,17 +126,17 @@ jobs:
           echo "tags=$TAGS" >> "$GITHUB_OUTPUT"
           echo "Image tags to publish: $TAGS"
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
 
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push dashboard image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: ./dashboard
           push: true
