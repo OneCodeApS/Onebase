@@ -4,11 +4,10 @@
 name: Security
 
 on:
-  pull_request:
   push:
-    branches: [main, master]
+    branches: [main, master, '[Ss]taging*', 'STAGING*', '[Pp]rod*', 'PROD*'] # merges til staging og produktion
   schedule:
-    - cron: "0 5 * * 1"   # hver mandag: fanger nye CVE'er i kode, der ikke er ændret
+    - cron: "0 5 * * 1" # mandag kl. 05 UTC; den centrale workflow kører kun i lige uger = hver 14. dag
   workflow_dispatch:
 
 permissions:
