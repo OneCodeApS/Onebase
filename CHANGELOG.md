@@ -8,6 +8,12 @@ While the project is on `0.x`, minor version bumps (`0.1 → 0.2`) may include b
 
 ## [Unreleased]
 
+## [2.16.1] - 2026-11-19
+
+### Changed
+
+- **Microsoft login no longer dead-ends on raw JSON when the state check fails.** `/auth/v1/microsoft/callback` answered `{"error":"invalid_state"}` with a 400 whenever the `auth_ms_nonce` cookie was missing or did not match `state`. That happens in normal use, especially on iPhones: the login finishes in a different browser than it started in (a link opened from Outlook/Teams, then Safari or Authenticator takes over), the user presses Back or reloads after a successful login (the cookie is already gone), or more than 10 minutes pass. The user was left looking at JSON with no way forward. When `state` carries a `return_to` that passes `validateRedirectTarget`, the callback now redirects there with `#error=invalid_state` so the app can offer a retry or restart the login. No tokens are issued on this path and the target must still be on the allowed-origins list, so the check itself is unchanged. Without a valid `return_to` the response is the same JSON 400 as before. Apps: read `error` from the URL fragment on the `return_to` page to handle it; apps that ignore it just show their login page again.
+
 ## [2.16.0] - 2026-11-09
 
 ### Changed
