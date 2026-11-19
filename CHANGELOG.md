@@ -8,6 +8,16 @@ While the project is on `0.x`, minor version bumps (`0.1 → 0.2`) may include b
 
 ## [Unreleased]
 
+## [2.17.0] - 2026-11-19
+
+### Added
+
+- **A magic-link token can stay valid until its user has set a password.** New column `auth.magic_link_tokens.reusable_until_password` (default `false`). A sign-in link is single-use, and in a browser opening it is using it: the verify page auto-submits. Invitation links get forwarded and land in shared mailboxes, so a colleague's click burned the link before the invitee reached "choose a password", and an administrator had to issue a new one. For a flagged token, `POST /auth/v1/magiclink/verify` now signs the user in without consuming it as long as the user has no password; `PUT /auth/v1/user` consumes the user's flagged tokens when a password is set. Expiry (`expires_at`) is unchanged, and a flagged token whose user already has a password is consumed on first use like any other. Nothing in OneBase sets the flag: `/auth/v1/magiclink` still issues single-use links, so emailed sign-in links and passwordless portals are unaffected. An app opts in where it mints tokens itself (an invitation edge function writing to `auth.magic_link_tokens`). Trade-off for whoever opts in: until a password is set, the link is a reusable credential for its whole lifetime, and whoever opens it can choose the password. For such tokens `consumed_at` now records when the password was set, not when the link was first opened.
+
+### Database
+
+- **Migration `0035_magic_link_reusable_until_password.sql`** adds the column, mirrored into `postgres/init/06_auth.sql`. On an existing install, apply it **before** deploying 2.17.0: the verify route reads the column, so without it every magic-link sign-in fails. Idempotent; existing tokens get `false` and behave as before.
+
 ## [2.16.1] - 2026-11-19
 
 ### Changed

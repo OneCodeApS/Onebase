@@ -200,6 +200,16 @@ async function putHandler(req: NextRequest) {
     [user.id, encrypted],
   );
 
+  // An invitation token stays usable until now (migration 0035). With a
+  // password in place the link has done its job, and leaving it live would be a
+  // second way into the account that the user does not know they still have.
+  await pool().query(
+    `UPDATE auth.magic_link_tokens
+        SET consumed_at = now()
+      WHERE user_id = $1 AND consumed_at IS NULL AND reusable_until_password`,
+    [user.id],
+  );
+
   // First password on an account that had none: record the email identity too,
   // matching what /auth/v1/signup writes, so the row doesn't stay OAuth-only.
   if (!hasPassword) {

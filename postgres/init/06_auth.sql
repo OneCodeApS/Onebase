@@ -65,7 +65,10 @@ CREATE TABLE auth.magic_link_tokens (
 	created_at   timestamptz NOT NULL DEFAULT now(),
 	expires_at   timestamptz NOT NULL,
 	consumed_at  timestamptz,
-	request_ip   inet
+	request_ip   inet,
+	-- Invitation tokens (migration 0035): a sign-in does not consume the token
+	-- while the user has no password; setting one does. false = single-use.
+	reusable_until_password boolean NOT NULL DEFAULT false
 );
 
 -- (user_id, created_at) backs the per-user rate-limit count;
