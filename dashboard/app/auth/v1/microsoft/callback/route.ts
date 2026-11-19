@@ -49,9 +49,6 @@ async function handler(req: NextRequest) {
 
   const [stateNonce, encodedReturnTo] = state.split(".");
   const cookieNonce = req.cookies.get("auth_ms_nonce")?.value;
-  if (!stateNonce || !cookieNonce || stateNonce !== cookieNonce) {
-    return NextResponse.json({ error: "invalid_state" }, { status: 400 });
-  }
 
   // Decode + validate return_to up front — before minting any tokens — so a
   // tampered or unallowlisted return_to can't lure a victim through /start and
@@ -62,6 +59,19 @@ async function handler(req: NextRequest) {
     ? Buffer.from(encodedReturnTo, "base64url").toString("utf8")
     : "";
   const validatedReturnTo = returnTo ? await validateRedirectTarget(returnTo) : "";
+
+  if (!stateNonce || !cookieNonce || stateNonce !== cookieNonce) {
+    // A missing/stale nonce cookie is usually user-recoverable (login finished
+    // in another browser, Back after success, >10 min), so hand control back to
+    // the app to offer a retry. No tokens are issued and the target is allowlisted.
+    if (validatedReturnTo) {
+      const url = new URL(validatedReturnTo);
+      url.hash = "error=invalid_state";
+      return NextResponse.redirect(url);
+    }
+    return NextResponse.json({ error: "invalid_state" }, { status: 400 });
+  }
+
   if (returnTo && !validatedReturnTo) {
     return NextResponse.json({ error: "invalid_redirect" }, { status: 400 });
   }
