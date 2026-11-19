@@ -13,7 +13,8 @@ import { validateRedirectTarget } from "@/lib/cors";
 //
 //   GET  — non-consuming validity check + a minimal HTML page whose form
 //          auto-submits via JS (with a visible button as no-JS fallback).
-//   POST — atomically consumes the token, creates the session, and 303s to
+//   POST — atomically consumes the token (unless it is an invitation token
+//          whose user has no password yet — see the consume below), creates the session, and 303s to
 //          the app with tokens in the URL fragment (the exact contract of
 //          the Microsoft OAuth callback, so getSessionFromUrl() handles both).
 //
@@ -23,8 +24,8 @@ import { validateRedirectTarget } from "@/lib/cors";
 // GET stays side-effect-free, as it should be.
 //
 // Failures render one neutral HTML page for every mode (missing, expired,
-// consumed, disabled account) — no oracle, and never a redirect, since an
-// invalid token carries no trusted redirect_to.
+// consumed, disabled account) — no oracle. The one redirect on a failure is
+// signInRedirect below: a spent invitation link whose user has a password.
 
 const PAGE_STYLE = `
     body { font-family: system-ui, sans-serif; background: #171717; color: #e5e5e5;
@@ -118,6 +119,28 @@ function hashToken(token: string): string {
   return crypto.createHash("sha256").update(token).digest("hex");
 }
 
+// A spent or expired invitation link (reusable_until_password) whose user has
+// since chosen a password: the link has done its job, and what its holder needs
+// is the sign-in screen, not an error. They go to the token's own redirect_to
+// with no tokens, so the app shows its login. Only a row found by the token's
+// hash gets here, and the target is re-checked against the allowlist, so this
+// is no open redirect; nobody is signed in.
+async function signInRedirect(tokenHash: string): Promise<NextResponse | null> {
+  const { rows } = await pool().query<{ redirect_to: string }>(
+    `SELECT t.redirect_to
+       FROM auth.magic_link_tokens t
+       JOIN auth.users u ON u.id = t.user_id
+      WHERE t.token_hash = $1
+        AND t.reusable_until_password
+        AND u.encrypted_password IS NOT NULL
+        AND u.disabled_at IS NULL`,
+    [tokenHash],
+  );
+  if (rows.length === 0) return null;
+  const target = await validateRedirectTarget(rows[0].redirect_to);
+  return target ? NextResponse.redirect(target, 303) : null;
+}
+
 // GET — side-effect-free. Soft validity check (better UX than letting the
 // user click through to a guaranteed failure), then the auto-submit page.
 // The token travels onward in the form body, not the URL.
@@ -132,7 +155,9 @@ export async function GET(req: NextRequest) {
       WHERE token_hash = $1 AND consumed_at IS NULL AND expires_at > now()`,
     [hashToken(token)],
   );
-  if (rows.length === 0) return await errorPage();
+  if (rows.length === 0) {
+    return (await signInRedirect(hashToken(token))) ?? (await errorPage());
+  }
 
   // value is base64url (no quotes/angle brackets possible), but escape anyway.
   const safeToken = token.replace(/[^A-Za-z0-9_-]/g, "");
@@ -164,13 +189,24 @@ export async function POST(req: NextRequest) {
 
   // Atomic single-use consume: the consumed_at IS NULL guard means a
   // double-submit lets exactly one request win.
+  //
+  // The exception is an invitation token (reusable_until_password, migration
+  // 0035) whose user has no password yet: it is left unconsumed, so a stray
+  // click by someone the mail was forwarded to does not burn the link before
+  // the invitee has chosen a password. PUT /auth/v1/user consumes it then.
   const { rows } = await pool().query<{ user_id: string; redirect_to: string }>(
-    `UPDATE auth.magic_link_tokens
-        SET consumed_at = now()
-      WHERE token_hash = $1
-        AND consumed_at IS NULL
-        AND expires_at > now()
-    RETURNING user_id, redirect_to`,
+    `UPDATE auth.magic_link_tokens t
+        SET consumed_at = CASE
+              WHEN t.reusable_until_password
+               AND EXISTS (SELECT 1 FROM auth.users u
+                            WHERE u.id = t.user_id AND u.encrypted_password IS NULL)
+              THEN NULL
+              ELSE now()
+            END
+      WHERE t.token_hash = $1
+        AND t.consumed_at IS NULL
+        AND t.expires_at > now()
+    RETURNING t.user_id, t.redirect_to`,
     [hashToken(token)],
   );
   if (rows.length === 0) return await errorPage();

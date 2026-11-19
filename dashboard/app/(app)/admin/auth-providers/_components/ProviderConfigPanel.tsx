@@ -461,7 +461,9 @@ export function ProviderConfigPanel({
                 </div>
               </div>
               <p className="text-xs text-neutral-500">
-                Sign-in links are single-use. Sessions created via magic link
+                Sign-in links are single-use. (An invitation link an app mints
+                itself can opt in to staying valid until its user has set a
+                password.) Sessions created via magic link
                 use the TTL above — set it shorter than the platform&apos;s
                 30-day default for external-user portals.
               </p>
